@@ -6,8 +6,10 @@ import TmuxCore
 /// Never takes keyboard focus (`canBecomeKey`/`canBecomeMain` both return `false`, on top of
 /// `.nonactivatingPanel`'s own default) and floats above all other windows — including across
 /// Spaces and full-screen apps, via `collectionBehavior`. Renders one Tile per `TileState`:
-/// agent-type badge, label, and (for Claude Code) task text (TASK-002/TASK-003) — no color
-/// state yet (TASK-005).
+/// agent-type badge, label, (for Claude Code) task text (TASK-002/TASK-003), and its live
+/// Activity Phase color (TASK-005). This is the one manually-verified piece of TASK-005 — a
+/// live color cycling through Blinking/Ready/Fading/Idle isn't unit-testable (feature spec
+/// Testing Decisions); `ActivityPhase.color`, which this maps to `NSColor`, is.
 @MainActor
 final class FloatingPanel: NSPanel {
     /// Tiles scroll rather than resize the panel: the panel's width/side are fixed for this
@@ -80,7 +82,7 @@ final class FloatingPanel: NSPanel {
     private static func makeTileView(_ tile: TileState, size: CGFloat, y: CGFloat, width: CGFloat) -> NSView {
         let box = NSView(frame: NSRect(x: (width - size) / 2, y: y, width: size, height: size))
         box.wantsLayer = true
-        box.layer?.backgroundColor = NSColor.darkGray.cgColor
+        box.layer?.backgroundColor = NSColor(tile.phase.color).cgColor
         box.layer?.cornerRadius = 6
 
         // Badge on its own line so it stays legible at 9pt even when `label`/`taskText` truncate.
@@ -103,5 +105,19 @@ final class FloatingPanel: NSPanel {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
         return NSRect(x: visible.maxX - width, y: visible.minY, width: width, height: visible.height)
+    }
+}
+
+private extension NSColor {
+    /// The one point where `TmuxCore`'s AppKit-free `TileColor` (plain RGBA `Double`s) becomes
+    /// an `NSColor` — kept in `TmuxerApp` so `ActivityPhase.color`'s mapping logic stays
+    /// unit-testable headlessly (CLAUDE.md).
+    convenience init(_ tileColor: TileColor) {
+        self.init(
+            red: CGFloat(tileColor.red),
+            green: CGFloat(tileColor.green),
+            blue: CGFloat(tileColor.blue),
+            alpha: CGFloat(tileColor.alpha)
+        )
     }
 }

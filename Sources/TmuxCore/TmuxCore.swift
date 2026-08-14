@@ -1,3 +1,5 @@
+import Foundation
+
 /// Namespace placeholder for the tmuxer core.
 ///
 /// Scaffolding only — this exists so `swift test` has something to build before the first
@@ -9,4 +11,12 @@ public enum TmuxCore {
     /// SPEC.md §6: never invoke bare `tmux` — the user's interactive `tmux` is a zsh plugin
     /// alias that does not resolve non-interactively.
     public static let defaultTmuxPath = "/opt/homebrew/bin/tmux"
+
+    /// SPEC.md §1 Timing table — single source of truth for the four-phase model's defaults,
+    /// shared by `TmuxCore` (`ActivityStateStore`, `PollingActivitySource`) and `TmuxerApp`
+    /// (the render-refresh timer), so the two layers can't drift apart on what "default" means.
+    public static let defaultProbeInterval: TimeInterval = 5
+    public static let defaultBlinkWindow: TimeInterval = 10
+    public static let defaultReadyWindow: TimeInterval = 90
+    public static let defaultFadeWindow: TimeInterval = 3600
 }

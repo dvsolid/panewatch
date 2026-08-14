@@ -7,6 +7,12 @@ public protocol TmuxGateway: Sendable {
     /// `list-sessions` → `list-windows` → `list-panes`; this is the single spawn that gets
     /// the whole topology.
     func listPanes() throws -> String
+
+    /// Captures one pane's visible screen. SPEC §3.1/§3.3: `-p -J`, and never `-S` — passing
+    /// `-S` reads the normal screen's stale scrollback instead of the active alternate screen
+    /// under an agent, making a busy pane look permanently idle (a real misdiagnosis SPEC §3.3
+    /// corrects).
+    func capturePane(_ paneId: String) throws -> String
 }
 
 /// The live `TmuxGateway`: shells out to the tmux binary resolved at `tmuxPath`, by absolute
@@ -26,7 +32,27 @@ public struct ProcessTmuxGateway: TmuxGateway {
     }
 
     public func listPanes() throws -> String {
-        let invocation = Self.listPanesInvocation(tmuxPath: tmuxPath)
+        try Self.run(Self.listPanesInvocation(tmuxPath: tmuxPath))
+    }
+
+    public func capturePane(_ paneId: String) throws -> String {
+        try Self.run(Self.capturePaneInvocation(tmuxPath: tmuxPath, paneId: paneId))
+    }
+
+    /// Extracted so tests can assert on the exact argument vector without spawning a real
+    /// process — the acceptance requirement is that tmux is never invoked bare, which means
+    /// checking the executable slot and argument list, not just the path string.
+    static func listPanesInvocation(tmuxPath: String) -> (executable: String, arguments: [String]) {
+        (tmuxPath, ["list-panes", "-a", "-F", paneFormat])
+    }
+
+    /// SPEC §3.3: `-p -J` (visible screen, joined-wrapped lines), no `-S` — see the protocol
+    /// doc comment on `capturePane`.
+    static func capturePaneInvocation(tmuxPath: String, paneId: String) -> (executable: String, arguments: [String]) {
+        (tmuxPath, ["capture-pane", "-t", paneId, "-p", "-J"])
+    }
+
+    private static func run(_ invocation: (executable: String, arguments: [String])) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executable)
         process.arguments = invocation.arguments
@@ -36,12 +62,5 @@ public struct ProcessTmuxGateway: TmuxGateway {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(data: data, encoding: .utf8) ?? ""
-    }
-
-    /// Extracted so tests can assert on the exact argument vector without spawning a real
-    /// process — the acceptance requirement is that tmux is never invoked bare, which means
-    /// checking the executable slot and argument list, not just the path string.
-    static func listPanesInvocation(tmuxPath: String) -> (executable: String, arguments: [String]) {
-        (tmuxPath, ["list-panes", "-a", "-F", paneFormat])
     }
 }

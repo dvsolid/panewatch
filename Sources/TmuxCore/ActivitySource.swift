@@ -1,0 +1,15 @@
+import Foundation
+
+/// The seam for activity detection, independent of how activity is observed (ADR-0001).
+/// Everything above this protocol — `ActivityStateStore`, `StatusBarEngine`, `StatusBarShell`
+/// — depends only on these two members, never on a concrete adapter like
+/// `PollingActivitySource`. Swapping in the event-driven `ControlModeActivitySource` (SPEC
+/// §3.2, a later feature) is a new adapter, not a rendering-layer change.
+public protocol ActivitySource: AnyObject, Sendable {
+    /// Panes to watch. Called on every discovery pass; implementations diff against their
+    /// current set and attach/detach as needed.
+    func setWatchedPanes(_ paneIds: Set<String>)
+
+    /// Fires when a pane produces output.
+    var onOutput: ((_ paneId: String, _ at: Date) -> Void)? { get set }
+}
