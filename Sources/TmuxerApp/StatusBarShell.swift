@@ -53,7 +53,7 @@ final class StatusBarShell: NSObject {
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "rectangle.portrait", accessibilityDescription: "tmuxer")
+            let image = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "tmuxer")
             image?.isTemplate = true
             button.image = image
             button.target = self
