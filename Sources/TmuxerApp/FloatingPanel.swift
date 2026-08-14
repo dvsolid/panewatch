@@ -127,24 +127,31 @@ final class FloatingPanel: NSPanel {
         }
 
         let width = scrollView.contentSize.width
-        let cardSize = TileCardView.cardSize
+        let idealCardSize = TileCardView.cardSize
+        // `contentSize.width` already reflects whatever the vertical scroller actually costs
+        // right now (15pt under `.legacy`, ~0 under `.overlay` — see `TileCardView.cardSize`'s
+        // doc comment). Clamping the card to what's left, rather than assuming the ideal 84pt
+        // always fits, is what keeps the Activity Phase dot (pinned to the card's own right
+        // edge via `dotAnchor`) from being clipped by the clip view under legacy scrollers.
+        let horizontalMargin: CGFloat = 4
+        let cardWidth = min(idealCardSize.width, max(width - horizontalMargin * 2, 0))
         let spacing: CGFloat = 6
         let contentHeight = max(
-            CGFloat(tiles.count) * (cardSize.height + spacing) + spacing,
+            CGFloat(tiles.count) * (idealCardSize.height + spacing) + spacing,
             scrollView.contentSize.height
         )
         let document = NSView(frame: NSRect(x: 0, y: 0, width: width, height: contentHeight))
 
         var newViews: [String: TileCardView] = [:]
-        var y = contentHeight - spacing - cardSize.height
-        let x = max((width - cardSize.width) / 2, 0)
+        var y = contentHeight - spacing - idealCardSize.height
+        let x = max((width - cardWidth) / 2, 0)
         for tile in tiles {
-            let card = TileCardView()
+            let card = TileCardView(width: cardWidth)
             card.view.frame.origin = NSPoint(x: x, y: y)
             document.addSubview(card.view)
             card.apply(tile, blinkOn: blinkOn)
             newViews[tile.id] = card
-            y -= (cardSize.height + spacing)
+            y -= (idealCardSize.height + spacing)
         }
         scrollView.documentView = document
         tileViewsByID = newViews

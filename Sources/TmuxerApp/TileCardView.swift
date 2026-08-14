@@ -18,8 +18,12 @@ import TmuxCore
 /// phase keeps a steady dot at `dotSteadySize`, unaffected by `blinkOn`.
 @MainActor
 final class TileCardView {
-    /// Fixed per the feature spec's chosen visual direction — not adaptive to available width,
-    /// unlike the old square Tile's `min(width - 4, 52)`.
+    /// Ideal size per the feature spec's chosen visual direction. `FloatingPanel` clamps the
+    /// *width* actually passed to `init(width:)` down to whatever the scroll view's clip area
+    /// has available — under legacy (non-overlay) scrollers that's narrower than this ideal,
+    /// since the vertical scroller thickness eats into `contentSize.width` (see `FloatingPanel`
+    /// review notes: 92pt panel -> 77pt clip under `.legacy`, not 92pt). Height is never
+    /// adaptive; only width is.
     static let cardSize = NSSize(width: 84, height: 64)
 
     private static let cornerRadius: CGFloat = 10
@@ -32,9 +36,11 @@ final class TileCardView {
     private static let dotMinSize: CGFloat = 6
     private static let dotMaxSize: CGFloat = 8
     private static let dotMargin: CGFloat = 6
-    /// The dot's top-right corner is pinned here regardless of size, so growing/shrinking
-    /// reads as a pulse anchored to the tile's corner rather than a dot that drifts.
-    private static let dotAnchor = NSPoint(x: cardSize.width - dotMargin, y: cardSize.height - dotMargin)
+    /// The dot's top-right corner is pinned here regardless of pulse size, so growing/shrinking
+    /// reads as a pulse anchored to the tile's corner rather than a dot that drifts. Computed
+    /// from this instance's actual `width` (not the static `cardSize.width`) so the dot never
+    /// sits past the card's real right edge when the card has been clamped narrower.
+    private let dotAnchor: NSPoint
     /// Matches `toggleBlink`'s own cadence (`defaultBlinkPeriod / 2`) so one grow-or-shrink
     /// animation finishes right as the next toggle fires — a continuous breathing motion, not
     /// a snap followed by a pause. `FloatingPanel` keeps owning the driving `Timer`; this is
@@ -45,9 +51,17 @@ final class TileCardView {
     private static let iconLabelRowHeight: CGFloat = 16
     private static let badgeWidth: CGFloat = 18
 
-    /// A square frame of `size`, anchored so `dotAnchor` is always its top-right corner.
-    private static func dotFrame(size: CGFloat) -> NSRect {
-        NSRect(x: dotAnchor.x - size, y: dotAnchor.y - size, width: size, height: size)
+    /// A square frame of `size`, anchored so `anchor` is always its top-right corner. `static`
+    /// and anchor-parameterized (rather than reading the instance `dotAnchor`) so `init` can
+    /// call it before `self` is fully initialized.
+    private static func dotFrame(size: CGFloat, anchor: NSPoint) -> NSRect {
+        NSRect(x: anchor.x - size, y: anchor.y - size, width: size, height: size)
+    }
+
+    /// Instance-side convenience over the static `dotFrame(size:anchor:)`, using this card's
+    /// actual `dotAnchor`. Used everywhere after `init` completes.
+    private func dotFrame(size: CGFloat) -> NSRect {
+        Self.dotFrame(size: size, anchor: dotAnchor)
     }
 
     /// For `FloatingPanel` to place in its document view, keyed by `pane_id` exactly as
@@ -63,8 +77,13 @@ final class TileCardView {
     /// call, matching the existing `stringValue`-diffing pattern for `nameLabel`/`taskLabel`.
     private var appliedBadge: BadgeGlyph?
 
-    init() {
-        let card = NSView(frame: NSRect(origin: .zero, size: Self.cardSize))
+    /// - Parameter width: this card's actual width, as clamped by `FloatingPanel` to whatever
+    ///   the scroll view's clip area has available. Defaults to the ideal `cardSize.width` for
+    ///   callers (tests) that don't care about scroller-thickness clamping. Height is always
+    ///   `cardSize.height` — never adaptive.
+    init(width: CGFloat = cardSize.width) {
+        let anchor = NSPoint(x: width - Self.dotMargin, y: Self.cardSize.height - Self.dotMargin)
+        let card = NSView(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.cardSize.height)))
         card.wantsLayer = true
         card.layer?.cornerRadius = Self.cornerRadius
         card.layer?.masksToBounds = true
@@ -126,7 +145,7 @@ final class TileCardView {
         task.cell?.wraps = true
         card.addSubview(task)
 
-        let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize))
+        let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize, anchor: anchor))
         indicator.wantsLayer = true
         // `dotMaxSize / 2` rather than the current frame's own half-width: CALayer clamps a
         // too-large `cornerRadius` down to the largest radius that still fits, so a single
@@ -141,10 +160,11 @@ final class TileCardView {
         badgeImageView = badgeImage
         nameLabel = name
         taskLabel = task
+        dotAnchor = anchor
 
         // Laid out against the pulse's widest extent, not the steady size, so the badge/name
         // row never touches the dot even at the top of its pulse.
-        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, dotFrame: Self.dotFrame(size: Self.dotMaxSize))
+        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, width: width, dotFrame: Self.dotFrame(size: Self.dotMaxSize, anchor: anchor))
     }
 
     /// Applies one Tile's badge/label/task-text and Activity Phase color. The sole place
@@ -185,7 +205,7 @@ final class TileCardView {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = Self.pulseDuration
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                dot.animator().frame = Self.dotFrame(size: size)
+                dot.animator().frame = dotFrame(size: size)
             }
         } else if dot.frame.size.width != Self.dotSteadySize {
             // `removeAllAnimations()` + a direct (non-`.animator()`) assignment: explicitly
@@ -199,14 +219,14 @@ final class TileCardView {
             // Implementation notes); `removeAllAnimations()` makes that guarantee explicit in
             // the code rather than resting on the animator-interrupt behavior alone.
             dot.layer?.removeAllAnimations()
-            dot.frame = Self.dotFrame(size: Self.dotSteadySize)
+            dot.frame = dotFrame(size: Self.dotSteadySize)
         }
     }
 
     /// Left-aligned layout: icon+label row at the top (clipped short of the corner dot), then
-    /// the task-text row filling the remaining height down to the bottom padding.
-    private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, dotFrame: NSRect) {
-        let width = cardSize.width
+    /// the task-text row filling the remaining height down to the bottom padding. `width` is
+    /// this card's actual (possibly clamped) width, not the static `cardSize.width`.
+    private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, width: CGFloat, dotFrame: NSRect) {
         let height = cardSize.height
         let rowRightEdge = dotFrame.minX - 2
         let rowY = height - padding - iconLabelRowHeight
