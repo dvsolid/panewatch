@@ -33,7 +33,8 @@ final class FloatingPanel: NSPanel {
     private var currentTiles: [TileState] = []
     /// Toggled every `defaultBlinkPeriod / 2` seconds by `blinkTimer`; passed to every
     /// `TileCardView.apply(_:blinkOn:)` call, which is where a `.blinking` Tile's dot actually
-    /// alternates color (`TileCardView.blinkOffColor`).
+    /// pulses in size (TASK-009: grows/shrinks between `TileCardView.dotMinSize` and
+    /// `dotMaxSize`) — color stays fixed at `ActivityPhase.color` throughout.
     private var blinkOn = true
     /// Drives the Blinking phase's on/off cycle (SPEC §1 `blinkPeriod`) at the App layer only —
     /// `ActivityPhase` stays a pure function of `idleDuration` (SPEC §1: "driven entirely by

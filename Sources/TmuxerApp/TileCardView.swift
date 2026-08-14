@@ -2,16 +2,20 @@ import AppKit
 import TmuxCore
 
 /// Owns one Tile's visual composition — badge, label, task text, translucent glass card
-/// material, and (later, TASK-009) the Activity Indicator's pulse. `FloatingPanel`'s sole
-/// renderer of a Tile (feature spec § Architecture): keeps glyph resolution, layout math, and
+/// material, and the Activity Indicator's pulse. `FloatingPanel`'s sole renderer of a Tile
+/// (feature spec § Architecture): keeps glyph resolution, layout math, and
 /// `NSVisualEffectView` material setup out of the file that also owns window/scroll/
 /// panel-positioning concerns.
 ///
 /// TASK-008: 84x64pt rounded-rect card (feature spec "Compact Card" variant), replacing the
 /// old 52pt centered-text square. Left-aligned: an icon+label row, then a dimmer, two-line-
 /// clamped task-text row below it. The Activity Phase color lives on a small corner dot, not
-/// the card's fill — the dot always renders a fully-opaque color (SPEC §1's opacity floor):
-/// a "blinked off" Tile toggles the dot between two opaque colors, never dims it.
+/// the card's fill.
+///
+/// TASK-009: the Blinking phase's dot no longer toggles between two opaque colors — it pulses
+/// in *size* (`dotMinSize` <-> `dotMaxSize`) while staying `tile.phase.color` throughout, so
+/// SPEC §1's opacity floor holds trivially (opacity is never touched at all). Every other
+/// phase keeps a steady dot at `dotSteadySize`, unaffected by `blinkOn`.
 @MainActor
 final class TileCardView {
     /// Fixed per the feature spec's chosen visual direction — not adaptive to available width,
@@ -20,17 +24,31 @@ final class TileCardView {
 
     private static let cornerRadius: CGFloat = 10
     private static let padding: CGFloat = 8
-    private static let dotSize: CGFloat = 7
+    /// Steady (non-blinking-phase) dot diameter — unchanged from TASK-008.
+    private static let dotSteadySize: CGFloat = 7
+    /// TASK-009 pulse extremes: the Blinking dot alternates between these on every
+    /// `blinkOn` toggle, straddling `dotSteadySize` so the pulse reads as "the same dot,
+    /// breathing" rather than a differently-sized dot appearing.
+    private static let dotMinSize: CGFloat = 6
+    private static let dotMaxSize: CGFloat = 8
     private static let dotMargin: CGFloat = 6
+    /// The dot's top-right corner is pinned here regardless of size, so growing/shrinking
+    /// reads as a pulse anchored to the tile's corner rather than a dot that drifts.
+    private static let dotAnchor = NSPoint(x: cardSize.width - dotMargin, y: cardSize.height - dotMargin)
+    /// Matches `toggleBlink`'s own cadence (`defaultBlinkPeriod / 2`) so one grow-or-shrink
+    /// animation finishes right as the next toggle fires — a continuous breathing motion, not
+    /// a snap followed by a pause. `FloatingPanel` keeps owning the driving `Timer`; this is
+    /// purely how one already-delivered `blinkOn` toggle gets rendered smoothly (feature spec
+    /// "Considered and rejected": no new timing/driver module).
+    private static let pulseDuration = TmuxCore.defaultBlinkPeriod / 2
     private static let rowSpacing: CGFloat = 4
     private static let iconLabelRowHeight: CGFloat = 16
     private static let badgeWidth: CGFloat = 18
 
-    /// Fully opaque near-black — SPEC §1: "Opacity never drops below 100%, at any phase,
-    /// forever," so the blink's "off" half toggles the dot to a different opaque color rather
-    /// than dimming it. Not `ActivityPhase.grey` (`.idle`'s color): a blinking Tile flashing
-    /// through idle's exact hue twice a second would read as a second, unrelated phase.
-    private static let blinkOffColor = NSColor(white: 0.08, alpha: 1.0)
+    /// A square frame of `size`, anchored so `dotAnchor` is always its top-right corner.
+    private static func dotFrame(size: CGFloat) -> NSRect {
+        NSRect(x: dotAnchor.x - size, y: dotAnchor.y - size, width: size, height: size)
+    }
 
     /// For `FloatingPanel` to place in its document view, keyed by `pane_id` exactly as
     /// `tileViewsByID` does today.
@@ -93,14 +111,13 @@ final class TileCardView {
         task.cell?.wraps = true
         card.addSubview(task)
 
-        let indicator = NSView(frame: NSRect(
-            x: Self.cardSize.width - Self.dotMargin - Self.dotSize,
-            y: Self.cardSize.height - Self.dotMargin - Self.dotSize,
-            width: Self.dotSize,
-            height: Self.dotSize
-        ))
+        let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize))
         indicator.wantsLayer = true
-        indicator.layer?.cornerRadius = Self.dotSize / 2
+        // `dotMaxSize / 2` rather than the current frame's own half-width: CALayer clamps a
+        // too-large `cornerRadius` down to the largest radius that still fits, so a single
+        // fixed value renders a full circle at every size the pulse ever takes (6-8pt) without
+        // needing to be kept in sync as `dot.frame` changes size in `apply(_:blinkOn:)`.
+        indicator.layer?.cornerRadius = Self.dotMaxSize / 2
         card.addSubview(indicator)
 
         view = card
@@ -109,13 +126,18 @@ final class TileCardView {
         nameLabel = name
         taskLabel = task
 
-        Self.layout(badge: badge, name: name, task: task, dotFrame: indicator.frame)
+        // Laid out against the pulse's widest extent, not the steady size, so the badge/name
+        // row never touches the dot even at the top of its pulse.
+        Self.layout(badge: badge, name: name, task: task, dotFrame: Self.dotFrame(size: Self.dotMaxSize))
     }
 
     /// Applies one Tile's badge/label/task-text and Activity Phase color. The sole place
-    /// `blinkOn` affects rendering: `.blinking` Tiles alternate their dot between
-    /// `ActivityPhase.color` and `Self.blinkOffColor`; every other phase always shows its
-    /// `ActivityPhase.color` steadily. Both colors are fully opaque, so the dot never dims.
+    /// `blinkOn` affects rendering: a `.blinking` Tile's dot pulses in size between
+    /// `dotMinSize` and `dotMaxSize`, animated smoothly over `pulseDuration`; every other
+    /// phase shows a steady dot at `dotSteadySize`, snapped there immediately (never
+    /// animated) so leaving the Blinking phase never leaves a mid-pulse frame on screen. The
+    /// dot's color is always `tile.phase.color` at full opacity — size is the only thing that
+    /// ever changes about it.
     func apply(_ tile: TileState, blinkOn: Bool) {
         if badgeLabel.stringValue != tile.badge {
             badgeLabel.stringValue = tile.badge
@@ -128,9 +150,29 @@ final class TileCardView {
             taskLabel.stringValue = taskText
         }
 
-        let showOn: Bool
-        if case .blinking = tile.phase { showOn = blinkOn } else { showOn = true }
-        dot.layer?.backgroundColor = (showOn ? NSColor(tile.phase.color) : Self.blinkOffColor).cgColor
+        dot.layer?.backgroundColor = NSColor(tile.phase.color).cgColor
+
+        if case .blinking = tile.phase {
+            let size = blinkOn ? Self.dotMaxSize : Self.dotMinSize
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.pulseDuration
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                dot.animator().frame = Self.dotFrame(size: size)
+            }
+        } else if dot.frame.size.width != Self.dotSteadySize {
+            // `removeAllAnimations()` + a direct (non-`.animator()`) assignment: explicitly
+            // discard any pulse animation still in flight from the phase this Tile just left,
+            // then snap immediately — acceptance item 4: no leftover mid-pulse frame visible
+            // on a now-steady dot. A bare direct assignment already interrupts an in-flight
+            // `.animator()`-driven animation under AppKit's own animation architecture
+            // (verified empirically: a probe using an equivalent layer-backed `NSView` showed
+            // `layer.presentation()!.frame` snapping to the direct-set value immediately, with
+            // no continued interpolation toward the canceled animation's target — see
+            // Implementation notes); `removeAllAnimations()` makes that guarantee explicit in
+            // the code rather than resting on the animator-interrupt behavior alone.
+            dot.layer?.removeAllAnimations()
+            dot.frame = Self.dotFrame(size: Self.dotSteadySize)
+        }
     }
 
     /// Left-aligned layout: icon+label row at the top (clipped short of the corner dot), then
