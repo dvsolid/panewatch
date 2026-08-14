@@ -16,15 +16,29 @@ import TmuxCore
 /// in *size* (`dotMinSize` <-> `dotMaxSize`) while staying `tile.phase.color` throughout, so
 /// SPEC §1's opacity floor holds trivially (opacity is never touched at all). Every other
 /// phase keeps a steady dot at `dotSteadySize`, unaffected by `blinkOn`.
+///
+/// TASK-012: visual polish — the dot centers on the same line the badge/name header row centers
+/// on (`headerRowCenterY`), the card is wider (`cardSize.width` 84 -> 100), and the card's
+/// `tintLayer` now carries a subtle, static `tile.phase.color` tint alongside its existing
+/// hairline/glass chrome.
 @MainActor
 final class TileCardView {
     /// Ideal size per the feature spec's chosen visual direction. `FloatingPanel` clamps the
     /// *width* actually passed to `init(width:)` down to whatever the scroll view's clip area
     /// has available — under legacy (non-overlay) scrollers that's narrower than this ideal,
     /// since the vertical scroller thickness eats into `contentSize.width` (see `FloatingPanel`
-    /// review notes: 92pt panel -> 77pt clip under `.legacy`, not 92pt). Height is never
-    /// adaptive; only width is.
-    static let cardSize = NSSize(width: 84, height: 64)
+    /// review notes: 110pt panel -> 95pt clip under `.legacy`, not 110pt, minus the 8pt margin
+    /// `render(_:)` reserves -> 87pt card, still wider than the pre-TASK-012 84pt ideal). Height
+    /// is never adaptive; only width is.
+    ///
+    /// TASK-012 (acceptance item 3): widened 84 -> 100pt so task text truncates less
+    /// aggressively, in step with `FloatingPanel`'s panel width widening 92 -> 110pt (the two
+    /// move together: 84 was already `92 - 2*4` — the exact max that fit under the old panel
+    /// width's overlay-scroller clamp margin — so widening the card past 84 required widening
+    /// its container too). This supersedes the specific 92pt figure from TASK-007's acceptance
+    /// criteria; TASK-007's own acceptance ("panel 92pt wide") was itself only ever an input
+    /// sized to fit TASK-008's original 84pt card, not an independent constraint.
+    static let cardSize = NSSize(width: 100, height: 64)
 
     private static let cornerRadius: CGFloat = 10
     private static let padding: CGFloat = 8
@@ -36,11 +50,21 @@ final class TileCardView {
     private static let dotMinSize: CGFloat = 6
     private static let dotMaxSize: CGFloat = 8
     private static let dotMargin: CGFloat = 6
-    /// The dot's top-right corner is pinned here regardless of pulse size, so growing/shrinking
-    /// reads as a pulse anchored to the tile's corner rather than a dot that drifts. Computed
-    /// from this instance's actual `width` (not the static `cardSize.width`) so the dot never
-    /// sits past the card's real right edge when the card has been clamped narrower.
-    private let dotAnchor: NSPoint
+    /// TASK-012: the header row's vertical centerline — badge, name, and the dot all center on
+    /// this single value, rather than each being placed independently and hoping they agree.
+    /// A `static let` (not width-dependent) since the row's height/position are fixed regardless
+    /// of the card's actual (possibly clamped) width.
+    private static let headerRowCenterY: CGFloat = cardSize.height - padding - iconLabelRowHeight / 2
+    /// The dot's *center* is pinned here regardless of pulse size — replaces TASK-009's
+    /// top-right-corner anchor, which kept the dot from drifting during the pulse but placed it
+    /// near the card's top-right corner rather than on the header row's centerline, leaving it
+    /// visibly misaligned with the badge/name row above it (TASK-012 acceptance item 1). Centering
+    /// on a fixed point is a *stronger* anti-drift guarantee than corner-anchoring (the dot's
+    /// centroid never moves at all, growing/shrinking symmetrically), while also putting that
+    /// centroid exactly on `headerRowCenterY`. Computed from this instance's actual `width` (not
+    /// the static `cardSize.width`) so the dot never sits past the card's real right edge when the
+    /// card has been clamped narrower.
+    private let dotCenter: NSPoint
     /// Matches `toggleBlink`'s own cadence (`defaultBlinkPeriod / 2`) so one grow-or-shrink
     /// animation finishes right as the next toggle fires — a continuous breathing motion, not
     /// a snap followed by a pause. `FloatingPanel` keeps owning the driving `Timer`; this is
@@ -50,24 +74,35 @@ final class TileCardView {
     private static let rowSpacing: CGFloat = 4
     private static let iconLabelRowHeight: CGFloat = 16
     private static let badgeWidth: CGFloat = 18
+    /// TASK-012 (acceptance item 4): how strongly `tintLayer`'s fill carries `tile.phase.color`.
+    /// Chosen against the brightest case (`ActivityPhase.blinking`'s saturated orange) so the
+    /// tint reads as "subtle" per the acceptance wording rather than overpowering the glass
+    /// material/hairline chrome already on the card.
+    private static let phaseTintAlpha: CGFloat = 0.16
 
-    /// A square frame of `size`, anchored so `anchor` is always its top-right corner. `static`
-    /// and anchor-parameterized (rather than reading the instance `dotAnchor`) so `init` can
-    /// call it before `self` is fully initialized.
-    private static func dotFrame(size: CGFloat, anchor: NSPoint) -> NSRect {
-        NSRect(x: anchor.x - size, y: anchor.y - size, width: size, height: size)
+    /// A square frame of `size`, centered on `center`. `static` and center-parameterized (rather
+    /// than reading the instance `dotCenter`) so `init` can call it before `self` is fully
+    /// initialized.
+    private static func dotFrame(size: CGFloat, center: NSPoint) -> NSRect {
+        NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
     }
 
-    /// Instance-side convenience over the static `dotFrame(size:anchor:)`, using this card's
-    /// actual `dotAnchor`. Used everywhere after `init` completes.
+    /// Instance-side convenience over the static `dotFrame(size:center:)`, using this card's
+    /// actual `dotCenter`. Used everywhere after `init` completes.
     private func dotFrame(size: CGFloat) -> NSRect {
-        Self.dotFrame(size: size, anchor: dotAnchor)
+        Self.dotFrame(size: size, center: dotCenter)
     }
 
     /// For `FloatingPanel` to place in its document view, keyed by `pane_id` exactly as
     /// `tileViewsByID` does today.
     let view: NSView
     private let dot: NSView
+    /// TASK-012 (acceptance item 4): the card's translucent Activity-Phase-colored tint, set in
+    /// `apply(_:blinkOn:)` as a pure function of `tile.phase.color` — `blinkOn` is never read on
+    /// this path, so a `.blinking` Tile's tint is set to the exact same value on every blink
+    /// tick and never animates, structurally ruling out the pulsing this item forbids (only
+    /// `dot` pulses). Doubles as the hairline-border layer TASK-007/008 already drew here.
+    private let tintLayer: NSView
     private let badgeLabel: NSTextField
     private let badgeImageView: NSImageView
     private let nameLabel: NSTextField
@@ -82,7 +117,7 @@ final class TileCardView {
     ///   callers (tests) that don't care about scroller-thickness clamping. Height is always
     ///   `cardSize.height` — never adaptive.
     init(width: CGFloat = cardSize.width) {
-        let anchor = NSPoint(x: width - Self.dotMargin, y: Self.cardSize.height - Self.dotMargin)
+        let center = NSPoint(x: width - Self.dotMargin - Self.dotMaxSize / 2, y: Self.headerRowCenterY)
         let card = NSView(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.cardSize.height)))
         card.wantsLayer = true
         card.layer?.cornerRadius = Self.cornerRadius
@@ -102,17 +137,22 @@ final class TileCardView {
         effect.layer?.masksToBounds = true
         card.addSubview(effect)
 
-        // A faint tint + hairline on top of the material so the card boundary reads clearly
-        // even where the material's own blend is subtle (e.g. over a dark desktop).
-        let overlay = NSView(frame: card.bounds)
-        overlay.autoresizingMask = [.width, .height]
-        overlay.wantsLayer = true
-        overlay.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
-        overlay.layer?.cornerRadius = Self.cornerRadius
-        overlay.layer?.masksToBounds = true
-        overlay.layer?.borderWidth = 1
-        overlay.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
-        card.addSubview(overlay)
+        // TASK-012: a hairline + Activity-Phase-colored tint on top of the material, so the card
+        // boundary reads clearly even where the material's own blend is subtle (e.g. over a dark
+        // desktop), and the card itself carries a subtle static hint of its phase color
+        // (acceptance item 4). `backgroundColor` starts as the pre-TASK-012 static 6%-white fill
+        // as a neutral placeholder only — `apply(_:blinkOn:)` overwrites it with the actual
+        // phase-derived tint on the same call that always follows `init` in `FloatingPanel`, so
+        // no rendered frame ever shows this placeholder.
+        let tint = NSView(frame: card.bounds)
+        tint.autoresizingMask = [.width, .height]
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        tint.layer?.cornerRadius = Self.cornerRadius
+        tint.layer?.masksToBounds = true
+        tint.layer?.borderWidth = 1
+        tint.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        card.addSubview(tint)
 
         let badge = NSTextField(labelWithString: "")
         badge.font = .systemFont(ofSize: 13)
@@ -145,7 +185,7 @@ final class TileCardView {
         task.cell?.wraps = true
         card.addSubview(task)
 
-        let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize, anchor: anchor))
+        let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize, center: center))
         indicator.wantsLayer = true
         // `dotMaxSize / 2` rather than the current frame's own half-width: CALayer clamps a
         // too-large `cornerRadius` down to the largest radius that still fits, so a single
@@ -156,24 +196,26 @@ final class TileCardView {
 
         view = card
         dot = indicator
+        tintLayer = tint
         badgeLabel = badge
         badgeImageView = badgeImage
         nameLabel = name
         taskLabel = task
-        dotAnchor = anchor
+        dotCenter = center
 
         // Laid out against the pulse's widest extent, not the steady size, so the badge/name
         // row never touches the dot even at the top of its pulse.
-        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, width: width, dotFrame: Self.dotFrame(size: Self.dotMaxSize, anchor: anchor))
+        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, width: width, dotFrame: Self.dotFrame(size: Self.dotMaxSize, center: center))
     }
 
-    /// Applies one Tile's badge/label/task-text and Activity Phase color. The sole place
-    /// `blinkOn` affects rendering: a `.blinking` Tile's dot pulses in size between
+    /// Applies one Tile's badge/label/task-text, card tint, and Activity Phase dot. The sole
+    /// place `blinkOn` affects rendering: a `.blinking` Tile's dot pulses in size between
     /// `dotMinSize` and `dotMaxSize`, animated smoothly over `pulseDuration`; every other
     /// phase shows a steady dot at `dotSteadySize`, snapped there immediately (never
     /// animated) so leaving the Blinking phase never leaves a mid-pulse frame on screen. The
     /// dot's color is always `tile.phase.color` at full opacity — size is the only thing that
-    /// ever changes about it.
+    /// ever changes about it. `tintLayer`'s translucent phase-colored background (TASK-012) is
+    /// likewise always `tile.phase.color`, but never reads `blinkOn` at all, so it never pulses.
     func apply(_ tile: TileState, blinkOn: Bool) {
         if appliedBadge != tile.badge {
             appliedBadge = tile.badge
@@ -198,7 +240,19 @@ final class TileCardView {
             taskLabel.stringValue = taskText
         }
 
-        dot.layer?.backgroundColor = NSColor(tile.phase.color).cgColor
+        let phaseColor = NSColor(tile.phase.color)
+
+        // TASK-012 (acceptance item 4): a pure function of `tile.phase.color` alone — `blinkOn`
+        // is never consulted here, so a `.blinking` Tile's tint is reassigned the identical
+        // value on every blink tick this `apply(_:blinkOn:)` call happens to be part of. A
+        // direct (non-`.animator()`) assignment outside the `NSAnimationContext` group below,
+        // matching `dot`'s own unconditional color assignment just below it, so this never picks
+        // up an implicit animation either. `.fading`'s color legitimately drifts across
+        // `probeInterval` renders as `colorFraction` advances — that's the phase's own color
+        // changing, not this tint pulsing independently of it.
+        tintLayer.layer?.backgroundColor = phaseColor.withAlphaComponent(Self.phaseTintAlpha).cgColor
+
+        dot.layer?.backgroundColor = phaseColor.cgColor
 
         if case .blinking = tile.phase {
             let size = blinkOn ? Self.dotMaxSize : Self.dotMinSize
@@ -223,26 +277,46 @@ final class TileCardView {
         }
     }
 
+    /// Square size given to `badgeImage` (the SF Symbol slot) when centering it on the header
+    /// row — an `NSImageView` has no font-derived `intrinsicContentSize` the way the text labels
+    /// do, so it needs an explicit height to center rather than one measured from content.
+    private static let badgeImageSize: CGFloat = 16
+
     /// Left-aligned layout: icon+label row at the top (clipped short of the corner dot), then
     /// the task-text row filling the remaining height down to the bottom padding. `width` is
     /// this card's actual (possibly clamped) width, not the static `cardSize.width`.
+    ///
+    /// TASK-012 (acceptance item 1): `badge`, `badgeImage`, and `name` are each sized to their
+    /// *own* content height and then centered on `headerRowCenterY` — the same centerline the
+    /// dot's `dotFrame(size:center:)` centers on — rather than all three sharing one oversized
+    /// `iconLabelRowHeight`-tall frame and relying on `NSTextField`'s internal (and, across
+    /// different point sizes, inconsistent) vertical text alignment to make them agree. This
+    /// makes the alignment a layout invariant instead of an observed-to-look-right guess: a
+    /// 13pt badge glyph and a 10pt semibold name never had a reason to optically center the same
+    /// way inside an identical 16pt box, but a box sized to each one's own metrics and centered
+    /// on a shared line does, by construction. `iconLabelRowHeight` still reserves the same
+    /// nominal vertical band it always has (`rowTop`), so the task-text row below it is
+    /// unaffected by this change.
     private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, width: CGFloat, dotFrame: NSRect) {
         let height = cardSize.height
         let rowRightEdge = dotFrame.minX - 2
-        let rowY = height - padding - iconLabelRowHeight
+        let rowTop = height - padding - iconLabelRowHeight
+        let centerY = headerRowCenterY
 
-        let badgeFrame = NSRect(x: padding, y: rowY, width: badgeWidth, height: iconLabelRowHeight)
-        badge.frame = badgeFrame
-        badgeImage.frame = badgeFrame
+        let badgeHeight = badge.intrinsicContentSize.height
+        badge.frame = NSRect(x: padding, y: centerY - badgeHeight / 2, width: badgeWidth, height: badgeHeight)
+        badgeImage.frame = NSRect(x: padding, y: centerY - badgeImageSize / 2, width: badgeWidth, height: badgeImageSize)
+
+        let nameHeight = name.intrinsicContentSize.height
         name.frame = NSRect(
             x: padding + badgeWidth,
-            y: rowY,
+            y: centerY - nameHeight / 2,
             width: max(rowRightEdge - (padding + badgeWidth), 0),
-            height: iconLabelRowHeight
+            height: nameHeight
         )
 
         let taskY = padding
-        let taskHeight = max(rowY - rowSpacing - taskY, 0)
+        let taskHeight = max(rowTop - rowSpacing - taskY, 0)
         task.frame = NSRect(x: padding, y: taskY, width: width - padding * 2, height: taskHeight)
     }
 }

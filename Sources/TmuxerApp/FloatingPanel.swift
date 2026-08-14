@@ -67,10 +67,14 @@ final class FloatingPanel: NSPanel {
         let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
 
         // TASK-007: vibrant/frosted material replaces the old flat black fill, with rounded
-        // corners and a subtle hairline border so the panel reads as deliberate macOS chrome
-        // rather than a debug overlay. Sits behind `scrollView`, which stays transparent
-        // (`drawsBackground = false`) so the material shows through everywhere Tiles don't
-        // cover it.
+        // corners so the panel reads as deliberate macOS chrome rather than a debug overlay.
+        // Sits behind `scrollView`, which stays transparent (`drawsBackground = false`) so the
+        // material shows through everywhere Tiles don't cover it.
+        //
+        // TASK-012: the hairline border TASK-007 originally added here is gone — user screenshot
+        // feedback was that it read as a visible outer window frame around the whole panel, which
+        // this task's acceptance criteria explicitly call out to remove. Rounded corners stay:
+        // the acceptance item is "no outer frame/border," not "no corner radius."
         let material = NSVisualEffectView(frame: content.bounds)
         material.autoresizingMask = [.width, .height]
         material.material = .hudWindow
@@ -79,8 +83,6 @@ final class FloatingPanel: NSPanel {
         material.wantsLayer = true
         material.layer?.cornerRadius = Self.cornerRadius
         material.layer?.masksToBounds = true
-        material.layer?.borderWidth = 1
-        material.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         content.addSubview(material)
 
         scrollView.frame = content.bounds
@@ -172,7 +174,12 @@ final class FloatingPanel: NSPanel {
 
     private static func frame(on screen: NSScreen?) -> NSRect {
         // TASK-007: widened from 60pt to give tiles more room (TASK-008 follow-on).
-        let width: CGFloat = 92
+        // TASK-012: widened again 92 -> 110pt so `TileCardView.cardSize.width` could grow past
+        // its old 84pt ceiling (92pt was exactly `84 + 2*4`, the max the old card width could
+        // reach under `render(_:)`'s overlay-scroller margin — there was no slack left to widen
+        // the card without widening the panel too). Still respects the legacy-scroller clamp:
+        // see `TileCardView.cardSize`'s doc comment for the 110 -> 87pt-under-`.legacy` math.
+        let width: CGFloat = 110
         guard let visible = screen?.visibleFrame else {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
