@@ -59,27 +59,15 @@ carry no stack assumptions.
 - `REPO_ROOT` (`parents[3]`) resolves correctly at this vendored depth.
 - `validate_vault.py` passes; `allocate_id.py` increments; SessionStart hook emits valid JSON.
 
-## Known blocker: SwiftPM is broken on this machine
+## Resolved: SwiftPM toolchain mismatch (2026-08-13)
 
-`swift test` cannot run — **not** a project problem. Command Line Tools 16.2 shipped a
-mismatched SwiftPM:
+At vendoring time, `swift test` could not run on this machine — not a project problem.
+Command Line Tools 16.2 had shipped a mismatched SwiftPM: `PackageDescription.swiftmodule`
+(Dec 23 2024) was newer than `libPackageDescription.dylib` (Dec 6 2024), so the `Package.init`
+symbol the compiler emitted didn't exist at link time. Every `Package.swift` failed, including
+a bare three-line one; confirmed against tools-versions 6.0, 5.10, and 5.9 — no manifest change
+worked around it.
 
-```
-libPackageDescription.dylib      Dec  6 2024
-PackageDescription.swiftmodule   Dec 23 2024   ← different build
-```
-
-The `.swiftmodule` declares `swiftLanguageVersions: [SwiftVersion]` while the dylib exports
-`[SwiftLanguageMode]`, so the `Package.init` symbol the compiler emits doesn't exist at link
-time. **Every** `Package.swift` fails, including a bare three-line one; no manifest change works
-around it. Confirmed against tools-versions 6.0, 5.10, and 5.9.
-
-Fix by reinstalling Command Line Tools:
-
-```bash
-sudo rm -rf /Library/Developer/CommandLineTools
-sudo xcode-select --install
-```
-
-Or install full Xcode. Until then the Ralph loop's test gate reports RED on every task —
-correctly, since it cannot prove anything green.
+**Fixed by reinstalling Command Line Tools** (`sudo rm -rf /Library/Developer/CommandLineTools
+&& sudo xcode-select --install`). Re-verified after: `swift test` builds and passes, and the
+real gate command now returns `VERDICT: GREEN` end-to-end through `append_review.py gate`.

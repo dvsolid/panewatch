@@ -37,14 +37,6 @@ Tests/
   SPM is the only build path; don't propose `.xcodeproj` or XCUITest workflows.
 - Python 3 is required by the `qtc-dev-*` vault scripts.
 
-> **⚠ SwiftPM is currently broken on this machine — `swift test` cannot run.**
-> Command Line Tools 16.2 shipped a mismatched `PackageDescription` (`.swiftmodule` newer than
-> `.dylib`), so *every* `Package.swift` fails at link time. Not a project defect and not
-> fixable in the manifest. Fix with
-> `sudo rm -rf /Library/Developer/CommandLineTools && sudo xcode-select --install`.
-> Full diagnosis in [.claude/skills/VENDORED.md](.claude/skills/VENDORED.md).
-> Until it's fixed, the Ralph test gate reports RED on every task.
-
 ## tmux
 
 - Never invoke bare `tmux` — the user's interactive `tmux` is a zsh plugin alias that fails to
