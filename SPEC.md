@@ -21,10 +21,22 @@ Existing solutions (top, tmux list-panes, tmux capture-pane) are CLI-only and re
 
 **Item Card — each agent:**
 - **Square tile** with:
-  - **Color state:**
-    - 🟢 **Green** — pane produced output within the *active window* (see below)
-    - ⬜ **Grey** — idle, opacity fades over time
-    - Fade scale: 100% → 20% opacity over 60 minutes idle. **Never fade to 0** — an agent stuck for an hour is exactly the one you want to notice.
+  - **Color state — four phases, driven entirely by `idleDuration = now - lastOutputAt`:**
+
+    | Phase | `idleDuration` | Appearance |
+    |---|---|---|
+    | 🟠 **Blinking** | `< blinkWindow` (10s) | Blinking orange — pane is producing output *right now*. |
+    | 🟢 **Ready** | `blinkWindow ≤ … < readyWindow` (10s–90s) | Steady light green — recently active, most likely still the agent's turn. |
+    | 🟢→⬜ **Fading** | `readyWindow ≤ … < fadeWindow` (90s–3600s) | Color interpolates linearly from light green to grey. Opacity stays at 100% throughout — the fade is a hue change, not a dim. |
+    | ⬜ **Idle** | `≥ fadeWindow` (3600s+) | Steady grey, 100% opacity, indefinitely. |
+
+    **Opacity never drops below 100%, at any phase, forever.** This supersedes an earlier
+    design (opacity fading to a 20% floor past 60 minutes) — color now carries the
+    "how idle" signal, and a fully-opaque grey tile stays more discoverable than a dimmed
+    one, which was the actual goal the floor was protecting. A tile idle for a day looks
+    identical to one idle for an hour; if that distinction turns out to matter in practice,
+    reintroducing a very slow opacity fade *after* `fadeWindow` is the natural extension —
+    not attempted here since nothing has demonstrated the need yet.
   - **Label** — session name or project name (e.g., "qtc-auto", "t2q", "squid")
   - **Agent type badge** — π (Pi), 🟣 (Claude Code), 🤖 (Codex), or auto-detected
   - **Optional task indicator** — if Claude Code has a visible prompt task (e.g., "✳ BZS-19252")
@@ -34,10 +46,23 @@ Existing solutions (top, tmux list-panes, tmux capture-pane) are CLI-only and re
 | Parameter | Default | Meaning |
 |---|---|---|
 | `probeInterval` | 5s | How often the polling `ActivitySource` samples each pane. Ignored by the event-driven source. |
-| `activeWindow` | 15s | A pane is green if `now - lastOutputAt < activeWindow`. |
+| `blinkWindow` | 10s | Below this, phase is Blinking. |
+| `readyWindow` | 90s | Below this (and ≥ `blinkWindow`), phase is Ready. |
+| `fadeWindow` | 3600s | Below this (and ≥ `readyWindow`), phase is Fading; at or above it, phase is Idle. |
+| `blinkPeriod` | 1s | Blink cycle length (on/off). *Design choice, not measured — tune once a real tile is on screen.* |
 | `discoveryInterval` | 30s | How often the session/pane topology is re-scanned. |
 
-**Constraint:** `activeWindow` must be ≥ 2 × `probeInterval`. With polling, output is only detectable at sample boundaries, so a window narrower than two intervals makes tiles flicker grey between samples of a continuously-running agent. The event-driven source (§3) has no such constraint; the same `activeWindow` just becomes exact rather than quantized.
+**Constraint:** `blinkWindow` must be ≥ 2 × `probeInterval` — same reasoning as before, just
+applied to the narrower window now doing the work. Output is only detectable at polling
+sample boundaries, so a window shorter than two intervals risks the Blinking phase being
+skipped entirely between samples. **The stock defaults sit exactly on this boundary**
+(`blinkWindow` 10s = 2 × `probeInterval` 5s) — marginal, not comfortably clear of it. A
+continuously-active pane may show only one or zero polling samples inside its 10s blink
+window depending on phase alignment, so Blinking may read as flickery or get missed under
+`PollingActivitySource` (§3.1). Two ways to firm this up if it matters in practice: lower
+`probeInterval` to 3s (parallel cost: §3.1's spawn-rate estimate scales accordingly), or
+prioritize the event-driven source (§3.2), which has no such constraint — timestamps are
+exact there, so the phase boundaries are exact too.
 
 ### 2. Agent Detection & Discovery
 
@@ -119,11 +144,26 @@ protocol ActivitySource: AnyObject {
 }
 ```
 
-The consumer keeps one `lastOutputAt: [String: Date]` map and derives everything from it:
+The consumer keeps one `lastOutputAt: [String: Date]` map and derives everything from it —
+the map is the only state `ActivitySource` produces; the four-phase color model in §1 is a
+pure function of `idleDuration`, computed here and nowhere upstream:
 
 ```swift
-isActive     = Date().timeIntervalSince(lastOutputAt[paneId] ?? .distantPast) < activeWindow
+enum ActivityPhase {
+    case blinking
+    case ready
+    case fading(colorFraction: Double)  // 0 = still green, 1 = fully grey
+    case idle
+}
+
 idleDuration = Date().timeIntervalSince(lastOutputAt[paneId] ?? processStart)
+
+let phase: ActivityPhase = switch idleDuration {
+case ..<blinkWindow: .blinking
+case ..<readyWindow: .ready
+case ..<fadeWindow:  .fading(colorFraction: (idleDuration - readyWindow) / (fadeWindow - readyWindow))
+default:             .idle
+}
 ```
 
 #### 3.1 `PollingActivitySource` (Phase 1)
@@ -182,7 +222,7 @@ This is verified behaviour on tmux 3.6a, not a proposal.
 
 **Timestamp the payloads. Never parse them.** The data field is ANSI escape soup — a single `echo HELLO_FROM_ONE` produced ~25 `%output` lines, most of them cursor-positioning and colour sequences, with the payload split one character per line. The only information this source needs is *which pane* and *when*. Any attempt to interpret the bytes is unnecessary and would be a source of false negatives.
 
-**Note on granularity vs. §3.1.** This source fires on *bytes written*, whereas the polling source fires on *visible screen changed*. These differ: a repaint that redraws the screen identically emits `%output` but no hash change. Measurement in §3.1 shows idle agents emit nothing at all, so in practice both agree — but where they diverge, this source is the more sensitive of the two, and `activeWindow` (§1) is what smooths it.
+**Note on granularity vs. §3.1.** This source fires on *bytes written*, whereas the polling source fires on *visible screen changed*. These differ: a repaint that redraws the screen identically emits `%output` but no hash change. Measurement in §3.1 shows idle agents emit nothing at all, so in practice both agree — but where they diverge, this source is the more sensitive of the two, and it is exact where polling is quantized to `probeInterval` (see §1's `blinkWindow` constraint).
 
 **Supervision requirements** (this is the bulk of the work, and why it is Phase 2 rather than Phase 1):
 - A control client emits `%exit` and terminates when its session is killed → reap and remove from pool.
@@ -282,7 +322,7 @@ struct AgentPane: Identifiable, Hashable {
 
 /// Activity is NOT stored on the pane. It lives in one
 /// `[String: Date]` keyed by paneId, owned by the ActivitySource
-/// consumer, and `isActive` / `idleDuration` are derived (see §3).
+/// consumer, and `idleDuration` / `ActivityPhase` are derived from it (see §1, §3).
 /// Keeping it out of the struct is what lets a 250ms output event
 /// avoid invalidating the whole topology model.
 
@@ -311,8 +351,7 @@ enum AgentType: String, Codable {
 **User preferences:**
 - Side (left/right)
 - Tile size (S/M/L)
-- `probeInterval`, `activeWindow`, `discoveryInterval` — defaults and constraint defined in §1; this section must not restate the values
-- Idle fade duration (default 60min, floors at 20% opacity — §1)
+- `probeInterval`, `blinkWindow`, `readyWindow`, `fadeWindow`, `blinkPeriod`, `discoveryInterval` — defaults and constraint defined in §1; this section must not restate the values
 - Auto-open on click (focus vs new terminal)
 - Exclude sessions (user-configurable list, matched on `session_name`)
 
