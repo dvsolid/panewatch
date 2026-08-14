@@ -9,8 +9,9 @@ import TmuxCore
 ///
 /// TASK-008: 84x64pt rounded-rect card (feature spec "Compact Card" variant), replacing the
 /// old 52pt centered-text square. Left-aligned: an icon+label row, then a dimmer, two-line-
-/// clamped task-text row below it. The Activity Phase color lives on a small corner dot, not
-/// the card's fill.
+/// clamped task-text row below it. The Activity Phase color lives on a small dot centered on
+/// the header row, and (as of TASK-012) also tints the card's own fill at a fixed, phase-
+/// uniform low alpha — see `tintLayer` and `phaseTintAlpha`.
 ///
 /// TASK-009: the Blinking phase's dot no longer toggles between two opaque colors — it pulses
 /// in *size* (`dotMinSize` <-> `dotMaxSize`) while staying `tile.phase.color` throughout, so
@@ -282,8 +283,9 @@ final class TileCardView {
     /// do, so it needs an explicit height to center rather than one measured from content.
     private static let badgeImageSize: CGFloat = 16
 
-    /// Left-aligned layout: icon+label row at the top (clipped short of the corner dot), then
-    /// the task-text row filling the remaining height down to the bottom padding. `width` is
+    /// Left-aligned layout: icon+label row at the top (clipped short of the dot centered on
+    /// that row), then the task-text row filling the remaining height down to the bottom
+    /// padding. `width` is
     /// this card's actual (possibly clamped) width, not the static `cardSize.width`.
     ///
     /// TASK-012 (acceptance item 1): `badge`, `badgeImage`, and `name` are each sized to their

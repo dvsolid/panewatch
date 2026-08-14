@@ -132,9 +132,9 @@ final class FloatingPanel: NSPanel {
         let idealCardSize = TileCardView.cardSize
         // `contentSize.width` already reflects whatever the vertical scroller actually costs
         // right now (15pt under `.legacy`, ~0 under `.overlay` — see `TileCardView.cardSize`'s
-        // doc comment). Clamping the card to what's left, rather than assuming the ideal 84pt
-        // always fits, is what keeps the Activity Phase dot (pinned to the card's own right
-        // edge via `dotAnchor`) from being clipped by the clip view under legacy scrollers.
+        // doc comment). Clamping the card to what's left, rather than assuming the ideal 100pt
+        // always fits, is what keeps the Activity Phase dot (centered on the header row via
+        // `dotCenter`) from being clipped by the clip view under legacy scrollers.
         let horizontalMargin: CGFloat = 4
         let cardWidth = min(idealCardSize.width, max(width - horizontalMargin * 2, 0))
         let spacing: CGFloat = 6
