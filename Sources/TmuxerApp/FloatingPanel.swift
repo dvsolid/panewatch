@@ -5,11 +5,12 @@ import TmuxCore
 ///
 /// Never takes keyboard focus (`canBecomeKey`/`canBecomeMain` both return `false`, on top of
 /// `.nonactivatingPanel`'s own default) and floats above all other windows — including across
-/// Spaces and full-screen apps, via `collectionBehavior`. Renders one Tile per `TileState`:
-/// agent-type badge, label, (for Claude Code) task text (TASK-002/TASK-003), and its live
-/// Activity Phase color (TASK-005). This is the one manually-verified piece of TASK-005 — a
-/// live color cycling through Blinking/Ready/Fading/Idle isn't unit-testable (feature spec
-/// Testing Decisions); `ActivityPhase.color`, which this maps to `NSColor`, is.
+/// Spaces and full-screen apps, via `collectionBehavior`. Owns window/scroll/panel-positioning
+/// concerns only; each rendered Tile's own visual composition (badge, label, task text, glass
+/// card material, Activity Phase dot) is `TileCardView`'s (TASK-008), one instance per Tile,
+/// keyed by `pane_id`. This is the one manually-verified piece of the live Activity Phase
+/// cycling through Blinking/Ready/Fading/Idle (feature spec Testing Decisions) — not
+/// unit-testable, unlike `ActivityPhase.color` itself.
 @MainActor
 final class FloatingPanel: NSPanel {
     /// Tiles scroll rather than resize the panel: the panel's width/side are fixed for this
@@ -17,15 +18,11 @@ final class FloatingPanel: NSPanel {
     /// in one screen height (verified manually against this dev machine's ~35 panes).
     private let scrollView = NSScrollView()
 
-    /// One retained view pair per rendered Tile, keyed by `pane_id` (`TileState.id`) — lets
-    /// `render(_:)` and the blink timer update an existing Tile's color/text in place instead
-    /// of replacing `documentView`, which would reset the scroll position every call (see
-    /// `render(_:)`'s doc comment).
-    private struct TileView {
-        let box: NSView
-        let label: NSTextField
-    }
-    private var tileViewsByID: [String: TileView] = [:]
+    /// One retained `TileCardView` per rendered Tile, keyed by `pane_id` (`TileState.id`) —
+    /// lets `render(_:)` and the blink timer update an existing Tile's color/text in place
+    /// instead of replacing `documentView`, which would reset the scroll position every call
+    /// (see `render(_:)`'s doc comment).
+    private var tileViewsByID: [String: TileCardView] = [:]
     /// The pane-id order last rendered. `topology.current` (`StatusBarEngine`) only changes on
     /// a `reconcile()` pass, so this stays equal to the incoming order on every phase-refresh
     /// and blink tick in between — `render(_:)` uses that to skip the rebuild path.
@@ -34,19 +31,14 @@ final class FloatingPanel: NSPanel {
     /// cadence, not from a caller-supplied Tile list) knows which currently-rendered Tiles are
     /// in `.blinking` phase.
     private var currentTiles: [TileState] = []
-    /// Toggled every `defaultBlinkPeriod / 2` seconds by `blinkTimer`; `.blinking` Tiles show
-    /// `ActivityPhase.color` when this is `true`, `Self.blinkOffColor` otherwise.
+    /// Toggled every `defaultBlinkPeriod / 2` seconds by `blinkTimer`; passed to every
+    /// `TileCardView.apply(_:blinkOn:)` call, which is where a `.blinking` Tile's dot actually
+    /// alternates color (`TileCardView.blinkOffColor`).
     private var blinkOn = true
     /// Drives the Blinking phase's on/off cycle (SPEC §1 `blinkPeriod`) at the App layer only —
     /// `ActivityPhase` stays a pure function of `idleDuration` (SPEC §1: "driven entirely by
     /// idleDuration"), with no notion of wall-clock blink state.
     private var blinkTimer: Timer?
-
-    /// Fully opaque near-black — SPEC §1: "Opacity never drops below 100%, at any phase,
-    /// forever," so the blink's "off" half toggles to a different opaque color rather than
-    /// dimming. Not `ActivityPhase.grey` (`.idle`'s color): a blinking Tile flashing through
-    /// idle's exact hue twice a second would read as a second, unrelated phase.
-    private static let blinkOffColor = NSColor(white: 0.08, alpha: 1.0)
 
     /// Panel corner radius (TASK-007) — applied to the backing `NSVisualEffectView`'s layer
     /// since the window itself is `.borderless` and has no native chrome to round.
@@ -128,29 +120,30 @@ final class FloatingPanel: NSPanel {
         let ids = tiles.map(\.id)
         if ids == renderedOrder {
             for tile in tiles {
-                guard let view = tileViewsByID[tile.id] else { continue }
-                apply(tile, to: view)
+                tileViewsByID[tile.id]?.apply(tile, blinkOn: blinkOn)
             }
             return
         }
 
         let width = scrollView.contentSize.width
-        let tileSize: CGFloat = min(width - 4, 52)
-        let spacing: CGFloat = 4
+        let cardSize = TileCardView.cardSize
+        let spacing: CGFloat = 6
         let contentHeight = max(
-            CGFloat(tiles.count) * (tileSize + spacing) + spacing,
+            CGFloat(tiles.count) * (cardSize.height + spacing) + spacing,
             scrollView.contentSize.height
         )
         let document = NSView(frame: NSRect(x: 0, y: 0, width: width, height: contentHeight))
 
-        var newViews: [String: TileView] = [:]
-        var y = contentHeight - spacing - tileSize
+        var newViews: [String: TileCardView] = [:]
+        var y = contentHeight - spacing - cardSize.height
+        let x = max((width - cardSize.width) / 2, 0)
         for tile in tiles {
-            let view = Self.makeTileView(size: tileSize, y: y, width: width)
-            document.addSubview(view.box)
-            apply(tile, to: view)
-            newViews[tile.id] = view
-            y -= (tileSize + spacing)
+            let card = TileCardView()
+            card.view.frame.origin = NSPoint(x: x, y: y)
+            document.addSubview(card.view)
+            card.apply(tile, blinkOn: blinkOn)
+            newViews[tile.id] = card
+            y -= (cardSize.height + spacing)
         }
         scrollView.documentView = document
         tileViewsByID = newViews
@@ -164,42 +157,9 @@ final class FloatingPanel: NSPanel {
     private func toggleBlink() {
         blinkOn.toggle()
         for tile in currentTiles {
-            guard case .blinking = tile.phase, let view = tileViewsByID[tile.id] else { continue }
-            apply(tile, to: view)
+            guard case .blinking = tile.phase else { continue }
+            tileViewsByID[tile.id]?.apply(tile, blinkOn: blinkOn)
         }
-    }
-
-    /// Applies one Tile's color and text to its view. The sole place `blinkOn` affects
-    /// rendering: `.blinking` Tiles alternate between `ActivityPhase.color` and
-    /// `Self.blinkOffColor`; every other phase always shows its `ActivityPhase.color` steadily.
-    private func apply(_ tile: TileState, to view: TileView) {
-        let showOn: Bool
-        if case .blinking = tile.phase { showOn = blinkOn } else { showOn = true }
-        view.box.layer?.backgroundColor = (showOn ? NSColor(tile.phase.color) : Self.blinkOffColor).cgColor
-
-        let text = [tile.badge, tile.label, tile.taskText].compactMap { $0 }.joined(separator: "\n")
-        if view.label.stringValue != text {
-            view.label.stringValue = text
-        }
-    }
-
-    private static func makeTileView(size: CGFloat, y: CGFloat, width: CGFloat) -> TileView {
-        let box = NSView(frame: NSRect(x: (width - size) / 2, y: y, width: size, height: size))
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 6
-
-        let label = NSTextField(labelWithString: "")
-        label.frame = box.bounds.insetBy(dx: 3, dy: 3)
-        label.autoresizingMask = [.width, .height]
-        label.font = .systemFont(ofSize: 9)
-        label.textColor = .white
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 0
-        // Badge on its own line so it stays legible at 9pt even when `label`/`taskText` truncate
-        // — set via `apply(_:to:)`, which every caller runs immediately after this returns.
-        box.addSubview(label)
-        return TileView(box: box, label: label)
     }
 
     private static func frame(on screen: NSScreen?) -> NSRect {
@@ -209,19 +169,5 @@ final class FloatingPanel: NSPanel {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
         return NSRect(x: visible.maxX - width, y: visible.minY, width: width, height: visible.height)
-    }
-}
-
-private extension NSColor {
-    /// The one point where `TmuxCore`'s AppKit-free `TileColor` (plain RGBA `Double`s) becomes
-    /// an `NSColor` — kept in `TmuxerApp` so `ActivityPhase.color`'s mapping logic stays
-    /// unit-testable headlessly (CLAUDE.md).
-    convenience init(_ tileColor: TileColor) {
-        self.init(
-            red: CGFloat(tileColor.red),
-            green: CGFloat(tileColor.green),
-            blue: CGFloat(tileColor.blue),
-            alpha: CGFloat(tileColor.alpha)
-        )
     }
 }
