@@ -48,6 +48,10 @@ final class FloatingPanel: NSPanel {
     /// idle's exact hue twice a second would read as a second, unrelated phase.
     private static let blinkOffColor = NSColor(white: 0.08, alpha: 1.0)
 
+    /// Panel corner radius (TASK-007) — applied to the backing `NSVisualEffectView`'s layer
+    /// since the window itself is `.borderless` and has no native chrome to round.
+    private static let cornerRadius: CGFloat = 14
+
     init() {
         super.init(
             contentRect: FloatingPanel.frame(on: NSScreen.main),
@@ -61,11 +65,31 @@ final class FloatingPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
+        // The window itself is transparent (TASK-007): its rectangular backing store would
+        // otherwise show square corners around the rounded `NSVisualEffectView` below.
         isOpaque = false
-        backgroundColor = NSColor.black.withAlphaComponent(0.85)
+        backgroundColor = .clear
         hasShadow = true
 
         let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
+
+        // TASK-007: vibrant/frosted material replaces the old flat black fill, with rounded
+        // corners and a subtle hairline border so the panel reads as deliberate macOS chrome
+        // rather than a debug overlay. Sits behind `scrollView`, which stays transparent
+        // (`drawsBackground = false`) so the material shows through everywhere Tiles don't
+        // cover it.
+        let material = NSVisualEffectView(frame: content.bounds)
+        material.autoresizingMask = [.width, .height]
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .active
+        material.wantsLayer = true
+        material.layer?.cornerRadius = Self.cornerRadius
+        material.layer?.masksToBounds = true
+        material.layer?.borderWidth = 1
+        material.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        content.addSubview(material)
+
         scrollView.frame = content.bounds
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
@@ -179,7 +203,8 @@ final class FloatingPanel: NSPanel {
     }
 
     private static func frame(on screen: NSScreen?) -> NSRect {
-        let width: CGFloat = 60
+        // TASK-007: widened from 60pt to give tiles more room (TASK-008 follow-on).
+        let width: CGFloat = 92
         guard let visible = screen?.visibleFrame else {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
