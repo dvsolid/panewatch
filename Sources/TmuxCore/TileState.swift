@@ -1,14 +1,16 @@
-/// What `StatusBarShell` renders as one Tile. For this slice (TASK-002) that's just identity
-/// and a raw label — no agent-type badge, no color state (those land in TASK-003/TASK-005).
+/// What `StatusBarShell` renders as one Tile: an already-classified Agent Pane (TASK-003) —
+/// identity, label, agent-type badge, and (for Claude Code) task text. No color state yet
+/// (TASK-005).
 public struct TileState: Identifiable, Equatable, Sendable {
     public let id: String
     public let label: String
+    public let badge: String
+    public let taskText: String?
 
-    /// `label` is built from `windowIndex`/`paneIndex`, never `windowName` — SPEC §3.4:
-    /// dotted window names make `window_name` ambiguous, so the raw identifier is always
-    /// `session:window.pane` from indices.
-    public init(pane: RawPane) {
-        id = pane.paneId
-        label = "\(pane.sessionName):\(pane.windowIndex).\(pane.paneIndex)"
+    public init(pane: AgentPane) {
+        id = pane.id
+        label = pane.label
+        badge = pane.type.badge
+        taskText = pane.taskText
     }
 }

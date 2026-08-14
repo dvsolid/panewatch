@@ -5,8 +5,9 @@ import TmuxCore
 ///
 /// Never takes keyboard focus (`canBecomeKey`/`canBecomeMain` both return `false`, on top of
 /// `.nonactivatingPanel`'s own default) and floats above all other windows — including across
-/// Spaces and full-screen apps, via `collectionBehavior`. Renders one Tile per `TileState`
-/// (TASK-002) — raw label only, no agent-type badge or color state yet (TASK-003/TASK-005).
+/// Spaces and full-screen apps, via `collectionBehavior`. Renders one Tile per `TileState`:
+/// agent-type badge, label, and (for Claude Code) task text (TASK-002/TASK-003) — no color
+/// state yet (TASK-005).
 @MainActor
 final class FloatingPanel: NSPanel {
     /// Tiles scroll rather than resize the panel: the panel's width/side are fixed for this
@@ -82,13 +83,16 @@ final class FloatingPanel: NSPanel {
         box.layer?.backgroundColor = NSColor.darkGray.cgColor
         box.layer?.cornerRadius = 6
 
-        let label = NSTextField(labelWithString: tile.label)
+        // Badge on its own line so it stays legible at 9pt even when `label`/`taskText` truncate.
+        let text = [tile.badge, tile.label, tile.taskText].compactMap { $0 }.joined(separator: "\n")
+        let label = NSTextField(labelWithString: text)
         label.frame = box.bounds.insetBy(dx: 3, dy: 3)
         label.autoresizingMask = [.width, .height]
         label.font = .systemFont(ofSize: 9)
         label.textColor = .white
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 0
         box.addSubview(label)
         return box
     }
