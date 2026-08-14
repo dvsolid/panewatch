@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/qtc_dev_memory_load.py"
+          }
+        ]
+      }
+    ]
+  }
+}

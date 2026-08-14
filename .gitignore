@@ -1,0 +1,17 @@
+# Swift / SPM
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Python bytecode from the qtc-dev vault scripts
+__pycache__/
+.pytest_cache/
+
+# qtc-dev vault — live operational state (task status, decisions, memory).
+# Gitignored by design: ralph's commit discipline assumes this is never staged.
+docs/project/
