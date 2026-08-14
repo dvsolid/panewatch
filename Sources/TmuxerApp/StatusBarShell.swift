@@ -13,11 +13,17 @@ final class StatusBarShell: NSObject {
     private var statusItem: NSStatusItem?
     private let panel = FloatingPanel()
     private let engine: StatusBarEngine
+    /// Re-runs discovery on `discoveryInterval` (TASK-006) — the only timer that spawns
+    /// `list-panes -a`. New/closed agent panes join or leave the Tile list on this cadence,
+    /// via `StatusBarEngine.reconcile(_:)`.
+    private var discoveryTimer: Timer?
     /// Re-renders on `probeInterval` so a Tile's Fading color keeps advancing with wall-clock
-    /// time even when its pane produces no new output — this is unrelated to how
-    /// `PollingActivitySource` itself samples tmux (that timer lives inside the adapter,
-    /// hidden behind `ActivitySource` — ADR-0001) and stays correct under any future adapter.
-    private var refreshTimer: Timer?
+    /// time even when its pane produces no new output — via `StatusBarEngine.tiles(_:)`, which
+    /// re-derives phases for the pane set `discoveryTimer` last found, with no new discovery
+    /// spawn. Unrelated to how `PollingActivitySource` itself samples tmux (that timer lives
+    /// inside the adapter, hidden behind `ActivitySource` — ADR-0001) and stays correct under
+    /// any future adapter.
+    private var phaseRefreshTimer: Timer?
     private let quitMenu: NSMenu = {
         let menu = NSMenu()
         menu.addItem(
@@ -40,12 +46,9 @@ final class StatusBarShell: NSObject {
     }
 
     /// Places the Menu Bar Icon, hides the Dock icon, runs one discovery pass to populate the
-    /// panel, and starts the re-render timer that keeps Activity Phases live. Call once from
-    /// `applicationDidFinishLaunching`.
-    ///
-    /// Discovery itself is still a single pass, not a re-scanning timer: live topology
-    /// reconciliation on `discoveryInterval` is TASK-006. This slice's timer only re-derives
-    /// phases for the pane set discovery already found.
+    /// panel, and starts both live timers: `discoveryTimer` re-scans topology on
+    /// `discoveryInterval`, `phaseRefreshTimer` re-renders Activity Phases on `probeInterval`.
+    /// Call once from `applicationDidFinishLaunching`.
     func start() {
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -59,21 +62,32 @@ final class StatusBarShell: NSObject {
         }
         statusItem = item
 
-        refreshTiles()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: TmuxCore.defaultProbeInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshTiles() }
+        reconcileTiles()
+        discoveryTimer = Timer.scheduledTimer(withTimeInterval: TmuxCore.defaultDiscoveryInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.reconcileTiles() }
+        }
+        phaseRefreshTimer = Timer.scheduledTimer(withTimeInterval: TmuxCore.defaultProbeInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshPhases() }
         }
     }
 
-    private func refreshTiles() {
+    /// Re-runs discovery and renders the reconciled Tile list. The only call that spawns
+    /// `list-panes -a` — see `discoveryTimer`.
+    private func reconcileTiles() {
         do {
-            panel.render(try engine.scanTiles())
+            panel.render(try engine.reconcile())
         } catch {
             // No live tmux server, or the spawn failed — show an empty bar rather than
-            // crashing the app. TASK-006 will need real error/retry handling for the discovery
-            // timer loop; a one-shot launch scan for this slice doesn't need it yet.
+            // crashing the app. A future task will need real error/retry handling for the
+            // discovery timer loop; this slice doesn't need it yet.
             panel.render([])
         }
+    }
+
+    /// Re-derives Activity Phases for the pane set `reconcileTiles` last found, with no new
+    /// discovery spawn, and renders them. See `phaseRefreshTimer`.
+    private func refreshPhases() {
+        panel.render(engine.tiles())
     }
 
     @objc private func statusItemClicked() {

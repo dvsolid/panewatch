@@ -83,7 +83,7 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
     let (_, discovery) = makeDiscovery()
     let engine = StatusBarEngine(discovery: discovery, activitySource: NoOpActivitySource())
 
-    let tiles = try engine.scanTiles()
+    let tiles = try engine.reconcile()
 
     let dotted = try #require(tiles.first { $0.id == "%51" })
     #expect(dotted.label == "t2q:1.2")

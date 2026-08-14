@@ -19,4 +19,10 @@ public enum TmuxCore {
     public static let defaultBlinkWindow: TimeInterval = 10
     public static let defaultReadyWindow: TimeInterval = 90
     public static let defaultFadeWindow: TimeInterval = 3600
+
+    /// SPEC §2: "Re-scan every `discoveryInterval` (30s) and reconcile against cached state by
+    /// `pane_id`." Deliberately slower than `defaultProbeInterval` — `list-panes -a` is a
+    /// separate subprocess spawn from the per-pane `capturePane` polling, and new/closed
+    /// sessions don't need probe-cadence responsiveness.
+    public static let defaultDiscoveryInterval: TimeInterval = 30
 }
