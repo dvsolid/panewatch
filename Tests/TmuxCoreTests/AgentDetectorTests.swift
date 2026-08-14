@@ -1,5 +1,38 @@
+import Foundation
 import Testing
 @testable import TmuxCore
+
+/// The hostname baked into the captured fixture's `LMYG2LW3F` rows (SPEC §2's negative
+/// signal). Passed explicitly to `AgentDetector` rather than relying on the real
+/// `ProcessInfo.processInfo.hostName` — tests must not depend on the machine they run on.
+private let fixtureHostname = "LMYG2LW3F"
+
+/// Records every `pid` it's asked about and returns canned argv for it — TASK-004's Test seam:
+/// "descendant-process data is injected via a fake (no real process tree walked in tests)."
+/// A class (not a struct) so the call log survives across the multiple `classify()` invocations
+/// a caching test needs to make against one shared `AgentDetector`.
+private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
+    private let argvByPID: [Int32: [String]]
+    private var callCounts: [Int32: Int] = [:]
+    private let lock = NSLock()
+
+    init(argvByPID: [Int32: [String]] = [:]) {
+        self.argvByPID = argvByPID
+    }
+
+    func descendantArgv(of pid: Int32) -> [String] {
+        lock.lock()
+        callCounts[pid, default: 0] += 1
+        lock.unlock()
+        return argvByPID[pid] ?? []
+    }
+
+    func callCount(for pid: Int32) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return callCounts[pid] ?? 0
+    }
+}
 
 /// Synthetic row appended to `capturedPaneListFixture` for the group-dedup acceptance item.
 /// SPEC §2.1: `session_group_size=1` on the reference machine today (the duplication is
@@ -17,8 +50,15 @@ private let groupDuplicatePaneRow = "%51|t2q-2|1|2.1.228|2|2.1.222|✳ Investiga
 /// Tile, and that `pane_current_command` never drives a positive ID on its own (SPEC §2).
 private let ambiguousPaneRow = "%99|qtc-auto|1|main|4|node|dev-server|9001|/dev/ttys099|/Users/dmitryv/Work/Projects/billing/qtc-ops-automation|0||0"
 
-private func classify(_ output: String) throws -> [AgentPane] {
-    try AgentDetector().classify(PaneDiscovery.parse(output))
+/// Default descendant inspector for tests that aren't exercising the fallback: returns no argv
+/// for any pid, so every pane that reaches ladder step 2 resolves to "no agent descendant"
+/// (acceptance item 2's shape) without any test accidentally walking a real process tree.
+private func classify(
+    _ output: String,
+    descendantInspector: any DescendantProcessInspector = FakeDescendantProcessInspector()
+) throws -> [AgentPane] {
+    try AgentDetector(hostname: fixtureHostname, descendantInspector: descendantInspector)
+        .classify(PaneDiscovery.parse(output))
 }
 
 @Suite struct AgentDetectorTests {
@@ -81,14 +121,63 @@ private func classify(_ output: String) throws -> [AgentPane] {
         #expect(survivor.label == "t2q:1.2")
     }
 
-    /// Acceptance item 6: a pane whose title matches neither a title pattern nor an explicit
-    /// negative signal (non-empty, non-hostname title; command outside the shell/ssh/ngrok
-    /// set) is excluded rather than shown as an unknown/ambiguous Tile — the conservative
-    /// default from this task's Slice, since the descendant-process fallback that would
-    /// otherwise adjudicate it isn't wired until TASK-004.
+    /// Acceptance item 6: a pane whose title matches neither a title pattern nor a hostname
+    /// negative signal now reaches the descendant fallback (TASK-004) instead of being
+    /// excluded outright — but with no agent descendant configured on the default fake, the
+    /// walk comes back empty and the pane is still excluded, not shown as an unknown/ambiguous
+    /// Tile.
     @Test func ambiguousPaneMatchingNeitherPatternNorNegativeSignalIsExcluded() throws {
         let panes = try classify(capturedPaneListFixture + "\n" + ambiguousPaneRow)
 
         #expect(panes.first { $0.id == "%99" } == nil)
+    }
+
+    // MARK: - TASK-004: descendant-process fallback classification
+
+    /// Acceptance item 1: a pane with no distinguishing title (`%28` — empty title, `zsh`
+    /// command) whose process tree contains a known agent process is classified and shown as a
+    /// Tile. This also covers the Test seam's third scenario ("a pane where the title-only
+    /// pass from TASK-003 would have made the wrong call without the fallback"): `%28` is
+    /// excluded by every other test in this file (they all use the empty-argv default fake);
+    /// only injecting an agent descendant for its pid flips the outcome.
+    @Test func paneWithAgentProcessInDescendantsIsClassifiedDespiteNoDistinguishingTitle() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [8578: ["/usr/local/bin/claude"]])
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        let tile = try #require(panes.first { $0.id == "%28" })
+        #expect(tile.type == .claudeCode)
+        // No `✳ `-prefixed title existed to derive this from (AgentPane's `matchedTitle` guard).
+        #expect(tile.taskText == nil)
+    }
+
+    /// Acceptance item 2: a pane with no distinguishing title and no agent process anywhere in
+    /// its descendants remains excluded — no false positive introduced. `%45` (empty title,
+    /// `zsh`) gets a non-empty but non-agent descendant list, so exclusion follows from the
+    /// walk's content, not merely from a fake that happens to return nothing.
+    @Test func paneWithNoAgentProcessInDescendantsRemainsExcluded() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [32244: ["/bin/zsh", "/usr/bin/less"]])
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        #expect(panes.first { $0.id == "%45" } == nil)
+    }
+
+    /// Acceptance item 3: the descendant walk for a given `pane_id` runs once and is cached for
+    /// the pane's lifetime, not re-run every discovery pass (SPEC §2). Classifies the same
+    /// fixture twice against one shared `AgentDetector` — simulating two discovery passes — and
+    /// asserts the fallback-eligible pane (`%28`) was walked exactly once. Also pins the
+    /// companion cost-saving from this task's negative-signal split: a hostname-titled pane
+    /// (`%11`) is never walked at all, excluded before ladder step 2 runs.
+    @Test func descendantWalkRunsOnceThenIsCachedAcrossDiscoveryPasses() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [8578: ["/usr/local/bin/claude"]])
+        let detector = AgentDetector(hostname: fixtureHostname, descendantInspector: inspector)
+        let rawPanes = try PaneDiscovery.parse(capturedPaneListFixture)
+
+        _ = detector.classify(rawPanes)
+        _ = detector.classify(rawPanes)
+
+        #expect(inspector.callCount(for: 8578) == 1)
+        #expect(inspector.callCount(for: 8870) == 0) // %11, hostname-titled — never walked
     }
 }
