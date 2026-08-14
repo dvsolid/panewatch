@@ -1,13 +1,19 @@
 import AppKit
+import TmuxCore
 
 /// A borderless, non-activating panel pinned to the right edge of the main screen.
 ///
 /// Never takes keyboard focus (`canBecomeKey`/`canBecomeMain` both return `false`, on top of
 /// `.nonactivatingPanel`'s own default) and floats above all other windows — including across
-/// Spaces and full-screen apps, via `collectionBehavior`. Empty of real content for this slice
-/// (TASK-001); Tile rendering lands in TASK-002.
+/// Spaces and full-screen apps, via `collectionBehavior`. Renders one Tile per `TileState`
+/// (TASK-002) — raw label only, no agent-type badge or color state yet (TASK-003/TASK-005).
 @MainActor
 final class FloatingPanel: NSPanel {
+    /// Tiles scroll rather than resize the panel: the panel's width/side are fixed for this
+    /// feature (epic "Out of scope"), and a real machine can easily have more panes than fit
+    /// in one screen height (verified manually against this dev machine's ~35 panes).
+    private let scrollView = NSScrollView()
+
     init() {
         super.init(
             contentRect: FloatingPanel.frame(on: NSScreen.main),
@@ -24,7 +30,15 @@ final class FloatingPanel: NSPanel {
         isOpaque = false
         backgroundColor = NSColor.black.withAlphaComponent(0.85)
         hasShadow = true
-        contentView = NSView(frame: NSRect(origin: .zero, size: frame.size))
+
+        let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        scrollView.frame = content.bounds
+        scrollView.autoresizingMask = [.width, .height]
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        content.addSubview(scrollView)
+        contentView = content
     }
 
     override var canBecomeKey: Bool { false }
@@ -40,6 +54,43 @@ final class FloatingPanel: NSPanel {
             setFrame(FloatingPanel.frame(on: NSScreen.main), display: true)
             orderFrontRegardless()
         }
+    }
+
+    /// Rebuilds the Tile list from scratch. Cheap enough for a one-shot render at launch
+    /// (TASK-002); live reconciliation without a full rebuild is TASK-006.
+    func render(_ tiles: [TileState]) {
+        let width = scrollView.contentSize.width
+        let tileSize: CGFloat = min(width - 4, 52)
+        let spacing: CGFloat = 4
+        let contentHeight = max(
+            CGFloat(tiles.count) * (tileSize + spacing) + spacing,
+            scrollView.contentSize.height
+        )
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: width, height: contentHeight))
+
+        var y = contentHeight - spacing - tileSize
+        for tile in tiles {
+            document.addSubview(Self.makeTileView(tile, size: tileSize, y: y, width: width))
+            y -= (tileSize + spacing)
+        }
+        scrollView.documentView = document
+    }
+
+    private static func makeTileView(_ tile: TileState, size: CGFloat, y: CGFloat, width: CGFloat) -> NSView {
+        let box = NSView(frame: NSRect(x: (width - size) / 2, y: y, width: size, height: size))
+        box.wantsLayer = true
+        box.layer?.backgroundColor = NSColor.darkGray.cgColor
+        box.layer?.cornerRadius = 6
+
+        let label = NSTextField(labelWithString: tile.label)
+        label.frame = box.bounds.insetBy(dx: 3, dy: 3)
+        label.autoresizingMask = [.width, .height]
+        label.font = .systemFont(ofSize: 9)
+        label.textColor = .white
+        label.alignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        box.addSubview(label)
+        return box
     }
 
     private static func frame(on screen: NSScreen?) -> NSRect {
