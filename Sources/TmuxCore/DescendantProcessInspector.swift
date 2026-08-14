@@ -5,25 +5,38 @@ import Foundation
 /// analogous to `TmuxGateway` — so tests inject canned argv instead of walking a real process
 /// tree (TASK-004 Test seam: "no real process tree walked in tests").
 public protocol DescendantProcessInspector: Sendable {
-    /// Returns the command line of every process descended from `pid`, at any depth (not just
-    /// direct children). Order is unspecified — `AgentDetector` matches each entry
-    /// independently and stops at the first hit.
-    func descendantArgv(of pid: Int32) -> [String]
+    /// Returns the command line of every process descended from each `pid` in `pids`, at any
+    /// depth (not just direct children). Order within a pid's array is unspecified —
+    /// `AgentDetector` matches each entry independently and stops at the first hit.
+    ///
+    /// A pid present in the result (even with an empty array) means the walk ran and found no
+    /// agent descendant; a pid *absent* from the result means the walk could not run at all
+    /// (e.g. the underlying process-table snapshot failed) — callers must not cache the former
+    /// interpretation for the latter case, or a single failed snapshot permanently misclassifies
+    /// every pane in that pass.
+    ///
+    /// Takes the whole batch of pids needing a walk in one call, not one call per pid: the
+    /// concrete process-table snapshot this is built on is a single `ps -A` spawn regardless of
+    /// how many pids are asked about, so batching collapses N spawns per discovery pass to 1
+    /// (TASK-004 measured ~50ms warm / 114ms cold per spawn).
+    func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]]
 }
 
 /// The live `DescendantProcessInspector`: snapshots the whole process table via
-/// `ps -A -o pid=,ppid=,command=` and walks descendants of `pid` within it. No Accessibility
-/// permission required — this feature requests none (feature spec § Implementation decisions).
+/// `ps -A -o pid=,ppid=,command=` and walks descendants of each requested pid within it. No
+/// Accessibility permission required — this feature requests none (feature spec §
+/// Implementation decisions).
 ///
-/// One `ps` spawn per call. This is SPEC §2's "only expensive step" in the detection ladder;
-/// `AgentDetector` caches results per `pane_id` so a given pane only ever pays for this once
-/// (SPEC §2: "run it once per newly-seen pane_id and cache the result for the pane's
-/// lifetime").
+/// One `ps` spawn per call, regardless of how many pids are in the batch — this is SPEC §2's
+/// "only expensive step" in the detection ladder; `AgentDetector` caches results per `pane_id`
+/// so a given pane only ever pays for this once (SPEC §2: "run it once per newly-seen pane_id
+/// and cache the result for the pane's lifetime") and batches every uncached pane needing a walk
+/// into one call per discovery pass.
 public struct ProcessTableDescendantInspector: DescendantProcessInspector {
     public init() {}
 
-    public func descendantArgv(of pid: Int32) -> [String] {
-        guard let table = try? Self.snapshotProcessTable() else { return [] }
+    public func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
+        guard !pids.isEmpty, let table = try? Self.snapshotProcessTable() else { return [:] }
 
         var childrenByParent: [Int32: [Int32]] = [:]
         var commandByPID: [Int32: String] = [:]
@@ -32,15 +45,19 @@ public struct ProcessTableDescendantInspector: DescendantProcessInspector {
             commandByPID[entry.pid] = entry.command
         }
 
-        var result: [String] = []
-        var frontier = childrenByParent[pid] ?? []
-        var visited = Set<Int32>()
-        while let next = frontier.popLast() {
-            guard visited.insert(next).inserted else { continue }
-            if let command = commandByPID[next] { result.append(command) }
-            frontier.append(contentsOf: childrenByParent[next] ?? [])
+        var results: [Int32: [String]] = [:]
+        for pid in pids {
+            var result: [String] = []
+            var frontier = childrenByParent[pid] ?? []
+            var visited = Set<Int32>()
+            while let next = frontier.popLast() {
+                guard visited.insert(next).inserted else { continue }
+                if let command = commandByPID[next] { result.append(command) }
+                frontier.append(contentsOf: childrenByParent[next] ?? [])
+            }
+            results[pid] = result
         }
-        return result
+        return results
     }
 
     private struct ProcessEntry {

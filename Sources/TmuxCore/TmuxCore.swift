@@ -19,6 +19,10 @@ public enum TmuxCore {
     public static let defaultBlinkWindow: TimeInterval = 10
     public static let defaultReadyWindow: TimeInterval = 90
     public static let defaultFadeWindow: TimeInterval = 3600
+    /// SPEC §1: "Blink cycle length (on/off)." `TmuxerApp`'s blink timer fires at half this
+    /// period — one tick to flip on, one to flip off — to complete a full on/off cycle every
+    /// `defaultBlinkPeriod`.
+    public static let defaultBlinkPeriod: TimeInterval = 1
 
     /// SPEC §2: "Re-scan every `discoveryInterval` (30s) and reconcile against cached state by
     /// `pane_id`." Deliberately slower than `defaultProbeInterval` — `list-panes -a` is a

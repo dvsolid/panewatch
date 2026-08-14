@@ -7,24 +7,30 @@ import Testing
 /// `ProcessInfo.processInfo.hostName` — tests must not depend on the machine they run on.
 private let fixtureHostname = "LMYG2LW3F"
 
-/// Records every `pid` it's asked about and returns canned argv for it — TASK-004's Test seam:
-/// "descendant-process data is injected via a fake (no real process tree walked in tests)."
-/// A class (not a struct) so the call log survives across the multiple `classify()` invocations
-/// a caching test needs to make against one shared `AgentDetector`.
+/// Records every `pid` it's asked about (per batch call) and returns canned argv for it —
+/// TASK-004's Test seam: "descendant-process data is injected via a fake (no real process tree
+/// walked in tests)." A class (not a struct) so the call log survives across the multiple
+/// `classify()` invocations a caching test needs to make against one shared `AgentDetector`.
 private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
     private let argvByPID: [Int32: [String]]
     private var callCounts: [Int32: Int] = [:]
+    /// Number of times `descendantArgv(of:)` itself was invoked — i.e. how many `ps -A`-
+    /// equivalent snapshots this simulates, regardless of how many pids were in each batch.
+    private(set) var batchCallCount = 0
     private let lock = NSLock()
 
     init(argvByPID: [Int32: [String]] = [:]) {
         self.argvByPID = argvByPID
     }
 
-    func descendantArgv(of pid: Int32) -> [String] {
+    func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
         lock.lock()
-        callCounts[pid, default: 0] += 1
+        batchCallCount += 1
+        for pid in pids { callCounts[pid, default: 0] += 1 }
         lock.unlock()
-        return argvByPID[pid] ?? []
+        var result: [Int32: [String]] = [:]
+        for pid in pids { result[pid] = argvByPID[pid] ?? [] }
+        return result
     }
 
     func callCount(for pid: Int32) -> Int {
@@ -179,5 +185,59 @@ private func classify(
 
         #expect(inspector.callCount(for: 8578) == 1)
         #expect(inspector.callCount(for: 8870) == 0) // %11, hostname-titled — never walked
+    }
+
+    /// Regression for the whole-branch review finding that `descendantArgv` was called once per
+    /// uncached fallback-eligible pane: `%28` and `%45` both reach ladder step 2 uncached in the
+    /// same `classify()` call (the fixture's two empty-titled shell panes), so a naive
+    /// implementation would spawn `ps -A` twice in this one pass. The fix batches every
+    /// uncached pid needing a walk into a single `descendantArgv(of:)` call per pass.
+    @Test func descendantWalkBatchesAllUncachedPanesIntoOneCallPerPass() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [8578: ["/usr/local/bin/claude"]])
+
+        _ = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        #expect(inspector.batchCallCount == 1)
+        #expect(inspector.callCount(for: 8578) == 1) // %28
+        #expect(inspector.callCount(for: 32244) == 1) // %45
+    }
+
+    /// `ProcessTableDescendantInspector.descendantArgv` returns `[:]` (no pid present, not even
+    /// with an empty array) when the underlying `ps -A` snapshot itself fails. A pid *absent*
+    /// from the result must not be cached as "walked, no agent descendant" — that would
+    /// permanently exclude every uncached pane caught by one failed snapshot. Confirms the walk
+    /// is retried on the next discovery pass instead.
+    @Test func failedDescendantSnapshotIsNotCachedAndIsRetriedNextPass() throws {
+        let inspector = FailingDescendantProcessInspector()
+        let detector = AgentDetector(hostname: fixtureHostname, descendantInspector: inspector)
+        let rawPanes = try PaneDiscovery.parse(capturedPaneListFixture)
+
+        let firstPass = detector.classify(rawPanes)
+        let secondPass = detector.classify(rawPanes)
+
+        #expect(firstPass.first { $0.id == "%28" } == nil)
+        #expect(secondPass.first { $0.id == "%28" } == nil)
+        #expect(inspector.batchCallCount == 2) // retried both passes, not cached after the first
+    }
+}
+
+/// Simulates a failed process-table snapshot: `descendantArgv` always returns an empty
+/// dictionary, with no pid present — distinct from `FakeDescendantProcessInspector` configured
+/// with empty argv, which reports pids as walked-and-empty.
+private final class FailingDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
+    private var callCounts = 0
+    private let lock = NSLock()
+
+    var batchCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return callCounts
+    }
+
+    func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
+        lock.lock()
+        callCounts += 1
+        lock.unlock()
+        return [:]
     }
 }

@@ -108,10 +108,23 @@ public struct AgentDetector: Sendable {
     }
 
     public func classify(_ panes: [RawPane]) -> [AgentPane] {
+        // Ladder step 2 needs at most one descendant-process walk per discovery pass, not one
+        // per pane: `descendantArgv(of:)` snapshots the entire process table regardless of how
+        // many pids it's asked about, so gather every uncached fallback-eligible pid first and
+        // walk them together (TASK-004's measured cost: ~50ms warm per `ps -A` spawn, so N
+        // spawns per pass collapses to 1).
+        var pidsNeedingWalk: Set<Int32> = []
+        for pane in panes {
+            guard case .needsDescendantWalk = titleSignal(pane) else { continue }
+            let (walked, _) = cache.lookup(pane.paneId)
+            if !walked { pidsNeedingWalk.insert(pane.pid) }
+        }
+        let batchArgv = pidsNeedingWalk.isEmpty ? [:] : descendantInspector.descendantArgv(of: pidsNeedingWalk)
+
         var winners: [String: (pane: RawPane, type: AgentType, matchedTitle: Bool)] = [:]
         var order: [String] = []
         for pane in panes {
-            guard let (type, matchedTitle) = detectType(pane) else { continue }
+            guard let (type, matchedTitle) = detectType(pane, batchArgv: batchArgv) else { continue }
             if let existing = winners[pane.paneId] {
                 // SPEC §2.1: session-group duplicates collapse to one Tile; break ties
                 // alphabetically on session name for stability across scans.
@@ -129,19 +142,38 @@ public struct AgentDetector: Sendable {
         }
     }
 
-    private func detectType(_ pane: RawPane) -> (type: AgentType, matchedTitle: Bool)? {
-        if pane.title.hasPrefix(claudeCodeTitlePrefix) { return (.claudeCode, true) }
-        if pane.title.hasPrefix(piTitlePrefix) { return (.pi, true) }
-        if pane.title == hostname || pane.title.hasPrefix(":") { return nil }
+    private enum TitleSignal {
+        case matched(type: AgentType)
+        case excluded
+        case needsDescendantWalk
+    }
 
-        let (walked, cachedType) = cache.lookup(pane.paneId)
-        if walked {
-            return cachedType.map { ($0, false) }
+    private func titleSignal(_ pane: RawPane) -> TitleSignal {
+        if pane.title.hasPrefix(claudeCodeTitlePrefix) { return .matched(type: .claudeCode) }
+        if pane.title.hasPrefix(piTitlePrefix) { return .matched(type: .pi) }
+        if pane.title == hostname || pane.title.hasPrefix(":") { return .excluded }
+        return .needsDescendantWalk
+    }
+
+    private func detectType(_ pane: RawPane, batchArgv: [Int32: [String]]) -> (type: AgentType, matchedTitle: Bool)? {
+        switch titleSignal(pane) {
+        case .matched(let type):
+            return (type, true)
+        case .excluded:
+            return nil
+        case .needsDescendantWalk:
+            let (walked, cachedType) = cache.lookup(pane.paneId)
+            if walked {
+                return cachedType.map { ($0, false) }
+            }
+            // A pid absent from `batchArgv` means the walk didn't run this pass (e.g. the `ps`
+            // snapshot failed) — don't cache in that case, so this pane gets retried on the
+            // next discovery pass instead of being permanently marked "no agent descendant".
+            guard let argv = batchArgv[pane.pid] else { return nil }
+            let type = Self.matchAgentType(argv: argv)
+            cache.store(type, for: pane.paneId)
+            return type.map { ($0, false) }
         }
-        let argv = descendantInspector.descendantArgv(of: pane.pid)
-        let type = Self.matchAgentType(argv: argv)
-        cache.store(type, for: pane.paneId)
-        return type.map { ($0, false) }
     }
 
     /// Executable-basename markers for SPEC §2 ladder step 2. Basename equality, not substring
