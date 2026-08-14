@@ -89,7 +89,7 @@ private func classify(
 
         let pi = try #require(panes.first { $0.id == "%29" })
         #expect(pi.type == .pi)
-        #expect(pi.type.badge == "π")
+        #expect(pi.type.badge == .text("π"))
         #expect(pi.label == "billing-advisor:1.2")
     }
 
@@ -102,6 +102,20 @@ private func classify(
         let claude = try #require(panes.first { $0.id == "%9" })
         #expect(claude.type == .claudeCode)
         #expect(claude.taskText == "task-execution-workflow")
+    }
+
+    /// TASK-010 acceptance item 1: Claude Code's badge is the SF Symbol `sparkle`, not the
+    /// `🟣` emoji — `BadgeGlyph` keeps this headlessly testable in `TmuxCore` (feature spec §
+    /// Architecture) even though the actual SF Symbol image is only ever constructed at the
+    /// `TmuxerApp` boundary (`TileCardView`).
+    @Test func claudeCodeBadgeIsSparkleSFSymbol() throws {
+        #expect(AgentType.claudeCode.badge == .symbol(name: "sparkle"))
+    }
+
+    /// TASK-010 acceptance item 2: Pi's badge stays the literal `π` text glyph — visually
+    /// unchanged by the `BadgeGlyph` type introduction, unlike Claude Code's.
+    @Test func piBadgeIsTextGlyph() throws {
+        #expect(AgentType.pi.badge == .text("π"))
     }
 
     /// Acceptance item 5: two sessions in the same session group (`t2q`/`t2q-2`) that share a

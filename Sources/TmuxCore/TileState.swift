@@ -5,7 +5,7 @@
 public struct TileState: Identifiable, Equatable, Sendable {
     public let id: String
     public let label: String
-    public let badge: String
+    public let badge: BadgeGlyph
     public let taskText: String?
     public let phase: ActivityPhase
 

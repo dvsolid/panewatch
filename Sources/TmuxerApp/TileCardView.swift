@@ -55,8 +55,13 @@ final class TileCardView {
     let view: NSView
     private let dot: NSView
     private let badgeLabel: NSTextField
+    private let badgeImageView: NSImageView
     private let nameLabel: NSTextField
     private let taskLabel: NSTextField
+    /// Tracks the last-applied badge so `apply(_:blinkOn:)` can skip re-resolving the SF
+    /// Symbol/text content (and the `badgeLabel`/`badgeImageView` visibility swap) on every
+    /// call, matching the existing `stringValue`-diffing pattern for `nameLabel`/`taskLabel`.
+    private var appliedBadge: BadgeGlyph?
 
     init() {
         let card = NSView(frame: NSRect(origin: .zero, size: Self.cardSize))
@@ -96,6 +101,16 @@ final class TileCardView {
         badge.lineBreakMode = .byClipping
         card.addSubview(badge)
 
+        // Shares the same badge slot as `badge` (the text field): exactly one of the two is
+        // visible at a time, chosen by `tile.badge`'s case in `apply(_:blinkOn:)`. `isTemplate`
+        // + `contentTintColor` mirrors the Menu Bar Icon's existing SF Symbol approach
+        // (`StatusBarShell`), tinted white to match the badge/name text on this dark card.
+        let badgeImage = NSImageView(frame: .zero)
+        badgeImage.imageScaling = .scaleProportionallyUpOrDown
+        badgeImage.contentTintColor = .white
+        badgeImage.isHidden = true
+        card.addSubview(badgeImage)
+
         let name = NSTextField(labelWithString: "")
         name.font = .systemFont(ofSize: 10, weight: .semibold)
         name.textColor = .white
@@ -123,12 +138,13 @@ final class TileCardView {
         view = card
         dot = indicator
         badgeLabel = badge
+        badgeImageView = badgeImage
         nameLabel = name
         taskLabel = task
 
         // Laid out against the pulse's widest extent, not the steady size, so the badge/name
         // row never touches the dot even at the top of its pulse.
-        Self.layout(badge: badge, name: name, task: task, dotFrame: Self.dotFrame(size: Self.dotMaxSize))
+        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, dotFrame: Self.dotFrame(size: Self.dotMaxSize))
     }
 
     /// Applies one Tile's badge/label/task-text and Activity Phase color. The sole place
@@ -139,8 +155,20 @@ final class TileCardView {
     /// dot's color is always `tile.phase.color` at full opacity — size is the only thing that
     /// ever changes about it.
     func apply(_ tile: TileState, blinkOn: Bool) {
-        if badgeLabel.stringValue != tile.badge {
-            badgeLabel.stringValue = tile.badge
+        if appliedBadge != tile.badge {
+            appliedBadge = tile.badge
+            switch tile.badge {
+            case .text(let glyph):
+                badgeImageView.isHidden = true
+                badgeLabel.isHidden = false
+                badgeLabel.stringValue = glyph
+            case .symbol(let name):
+                badgeLabel.isHidden = true
+                badgeImageView.isHidden = false
+                let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+                image?.isTemplate = true
+                badgeImageView.image = image
+            }
         }
         if nameLabel.stringValue != tile.label {
             nameLabel.stringValue = tile.label
@@ -177,13 +205,15 @@ final class TileCardView {
 
     /// Left-aligned layout: icon+label row at the top (clipped short of the corner dot), then
     /// the task-text row filling the remaining height down to the bottom padding.
-    private static func layout(badge: NSTextField, name: NSTextField, task: NSTextField, dotFrame: NSRect) {
+    private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, dotFrame: NSRect) {
         let width = cardSize.width
         let height = cardSize.height
         let rowRightEdge = dotFrame.minX - 2
         let rowY = height - padding - iconLabelRowHeight
 
-        badge.frame = NSRect(x: padding, y: rowY, width: badgeWidth, height: iconLabelRowHeight)
+        let badgeFrame = NSRect(x: padding, y: rowY, width: badgeWidth, height: iconLabelRowHeight)
+        badge.frame = badgeFrame
+        badgeImage.frame = badgeFrame
         name.frame = NSRect(
             x: padding + badgeWidth,
             y: rowY,

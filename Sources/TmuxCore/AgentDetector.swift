@@ -11,10 +11,10 @@ public enum AgentType: Sendable, Equatable {
     case pi
     case claudeCode
 
-    public var badge: String {
+    public var badge: BadgeGlyph {
         switch self {
-        case .pi: return "π"
-        case .claudeCode: return "🟣"
+        case .pi: return .text("π")
+        case .claudeCode: return .symbol(name: "sparkle")
         }
     }
 }
