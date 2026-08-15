@@ -6,12 +6,17 @@ public struct PaneTarget: Equatable, Sendable {
     public let sessionName: String
     public let windowIndex: Int
     public let paneIndex: Int
+    /// `#{pane_current_path}` — carried through from `RawPane.currentPath` so `ghosttyScript`
+    /// has a fallback match when the terminal's title has drifted away from its initial
+    /// `"tmux attach -t <session>"` (see that function's doc comment).
+    public let currentPath: String
 
-    public init(paneId: String, sessionName: String, windowIndex: Int, paneIndex: Int) {
+    public init(paneId: String, sessionName: String, windowIndex: Int, paneIndex: Int, currentPath: String) {
         self.paneId = paneId
         self.sessionName = sessionName
         self.windowIndex = windowIndex
         self.paneIndex = paneIndex
+        self.currentPath = currentPath
     }
 }
 
@@ -63,7 +68,7 @@ public struct SwitchActionPlanner: Sendable {
         guard let attachedClient, let owningApp = attachedClient.owningApp else {
             return .openNew(paneId: target.paneId)
         }
-        return .focusExisting(app: owningApp, script: Self.focusScript(app: owningApp, tty: attachedClient.tty))
+        return .focusExisting(app: owningApp, script: Self.focusScript(app: owningApp, target: target, tty: attachedClient.tty))
     }
 
     /// Builds the per-app AppleScript source for the focus-existing case. Each app's script was
@@ -71,28 +76,50 @@ public struct SwitchActionPlanner: Sendable {
     /// `osacompile -o /dev/null` (not exercised in the test suite, which forbids real
     /// AppleScript execution — see this task's Implementation notes for the verification
     /// transcript and the exact `.sdef` terminology each branch relies on).
-    private static func focusScript(app: SupportedTerminalApp, tty: String) -> String {
+    private static func focusScript(app: SupportedTerminalApp, target: PaneTarget, tty: String) -> String {
         switch app {
-        case .ghostty: return ghosttyScript(tty: tty)
+        case .ghostty: return ghosttyScript(sessionName: target.sessionName, currentPath: target.currentPath, tty: tty)
         case .iTerm2: return iTerm2Script(tty: tty)
         case .terminalApp: return terminalAppScript(tty: tty)
         }
     }
 
-    /// Ghostty's scripting dictionary (`Ghostty.sdef`) exposes `window`/`tab`/`terminal`
-    /// classes but no `tty` property on any of them — there is no term to search by. Falls back
-    /// to activating the app only (still distinct from, and strictly better than, opening a
-    /// brand-new terminal); the target tty is kept as a comment so the script still documents
-    /// its intended target, per this task's acceptance criteria.
-    private static func ghosttyScript(tty: String) -> String {
-        """
-        -- Ghostty's AppleScript dictionary has no tty-addressable window/terminal search
-        -- (verified against Ghostty.sdef); falls back to activating the app only.
+    /// Ghostty's scripting dictionary (`Ghostty.sdef`) exposes no `tty` property on its
+    /// `terminal` class, so unlike iTerm2/Terminal.app there's no exact identifier to search
+    /// by. It does expose a `focus` command that brings a specific `terminal`'s window/tab to
+    /// front (added after this app's original TASK-018 research, which only found an
+    /// app-wide `activate` — verified live against the currently-installed `Ghostty.sdef`,
+    /// 2026-08-15) plus `name` (the tab's title) and `working directory` on each terminal.
+    /// Best-effort match, in order, since neither is a stable identifier: 1) `name` equals
+    /// `"tmux attach -t <session>"` — exactly what a freshly-opened attach tab is titled,
+    /// before tmux's own dynamic title-setting (if any) overwrites it; 2) `working directory`
+    /// equals the pane's own `pane_current_path` — survives a renamed tab, but isn't unique
+    /// when multiple panes share a cwd (picks whichever terminal Ghostty's `first` returns).
+    /// Falls back to activating the app only, same as before, when neither matches (e.g. the
+    /// tab's title has drifted *and* its cwd doesn't match, or it's simply not open in Ghostty
+    /// at the expected place). The target tty is kept as a comment for traceability even though
+    /// it isn't used for matching.
+    private static func ghosttyScript(sessionName: String, currentPath: String, tty: String) -> String {
+        let titleMatch = "\"tmux attach -t \(escapeForAppleScript(sessionName))\""
+        let pathMatch = "\"\(escapeForAppleScript(currentPath))\""
+        return """
         -- target tty: \(tty)
         tell application "Ghostty"
-            activate
+            if exists (first terminal whose name is \(titleMatch)) then
+                focus (first terminal whose name is \(titleMatch))
+            else if exists (first terminal whose working directory is \(pathMatch)) then
+                focus (first terminal whose working directory is \(pathMatch))
+            else
+                activate
+            end if
         end tell
         """
+    }
+
+    /// Escapes a value for embedding inside an AppleScript double-quoted string literal —
+    /// backslash first (so it doesn't double-escape the quote escaping that follows), then `"`.
+    private static func escapeForAppleScript(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     /// iTerm2's `session` class exposes a read-only `tty` property (`iTerm2.sdef`), and

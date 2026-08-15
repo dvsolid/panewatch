@@ -14,6 +14,11 @@ public struct RawPane: Equatable, Sendable {
     public let command: String
     public let pid: Int32
     public let tty: String
+    /// `#{pane_current_path}` — the pane shell's current working directory. Used as
+    /// `SwitchActionPlanner`'s fallback match when focusing an existing Ghostty window (its
+    /// AppleScript dictionary exposes no `tty` property, see that type's `ghosttyScript` doc
+    /// comment).
+    public let currentPath: String
     /// tmux's own last-output timestamp for this pane's window (`#{window_activity}`),
     /// independent of this app's own process lifetime — the anchor `StatusBarEngine` seeds a
     /// pane's Activity Phase from the moment it's first discovered, including on the very first
@@ -68,6 +73,7 @@ public struct PaneDiscovery: Sendable {
                 command: fields[5],
                 pid: pid,
                 tty: fields[8],
+                currentPath: fields[9],
                 windowActivityAt: Date(timeIntervalSince1970: windowActivityEpoch)
             )
         }

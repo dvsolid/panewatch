@@ -84,6 +84,25 @@ public enum PreviewClientInvocation {
         ["select-pane", "-t", paneID]
     }
 
+    /// Reads `#{window_zoomed_flag}` for the group's *current* window — targets the group
+    /// (not a bare pane id), so this reads whatever `selectWindowArguments` last pointed the
+    /// group's own current-window pointer at. Verified live: zoom is a window-level property
+    /// shared by every session viewing that window (group and source alike), so this also
+    /// reflects the source session's real zoom state.
+    public static func zoomedQueryArguments(groupName: String) -> [String] {
+        ["display-message", "-p", "-t", groupName, "#{window_zoomed_flag}"]
+    }
+
+    /// Toggles zoom (`resize-pane -Z`) for the group's current window. `PreviewClientLifecycle`
+    /// only ever calls this when `zoomedQueryArguments` reports the window isn't already
+    /// zoomed, and pairs every call here with an equal-and-opposite one on teardown — since
+    /// the flag is shared with the source session (see `zoomedQueryArguments`'s doc comment),
+    /// toggling it is visible to any real client already attached there for as long as the
+    /// popup is open, and must be restored rather than left dangling.
+    public static func toggleZoomArguments(groupName: String) -> [String] {
+        ["resize-pane", "-Z", "-t", groupName]
+    }
+
     /// The one vector handed directly to `LocalProcessTerminalView.startProcess(executable:
     /// args:)` outside the `TmuxGateway` seam (TmuxerApp's `PreviewClient`) — carries
     /// `tmuxPath` so a test can assert the executable slot is never bare `tmux` (CLAUDE.md),

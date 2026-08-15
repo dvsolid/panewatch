@@ -317,6 +317,7 @@ final class HoverPreviewController: NSResponder {
     /// a `nonisolated static` function taking only `Sendable` values precisely so
     /// `Task.detached` can run it without hopping back through `self` at all.
     fileprivate func tileDoubleClicked(paneID: String) {
+        FileHandle.standardError.write(Data("tmuxer: double-click received for \(paneID)\n".utf8))
         let teardown = closeAndDetachClient()
 
         let gateway = gateway
@@ -367,7 +368,9 @@ final class HoverPreviewController: NSResponder {
             ttyOwnerResolver: ttyOwnerResolver
         )
 
-        switch switchPlanner.plan(target: target, attachedClient: attachedClient) {
+        let plan = switchPlanner.plan(target: target, attachedClient: attachedClient)
+        FileHandle.standardError.write(Data("tmuxer: switch plan for \(paneID) -> \(plan), attachedClient=\(String(describing: attachedClient))\n".utf8))
+        switch plan {
         case .focusExisting(_, let script):
             // SPEC §4 step 1: retarget the tmux client already attached to this session
             // *before* the AppleScript runs — `SwitchActionPlanner`'s own doc comment is
@@ -405,7 +408,7 @@ final class HoverPreviewController: NSResponder {
         guard let panes = try? paneDiscovery.scan(), let pane = panes.first(where: { $0.paneId == paneID }) else {
             return nil
         }
-        return PaneTarget(paneId: pane.paneId, sessionName: pane.sessionName, windowIndex: pane.windowIndex, paneIndex: pane.paneIndex)
+        return PaneTarget(paneId: pane.paneId, sessionName: pane.sessionName, windowIndex: pane.windowIndex, paneIndex: pane.paneIndex, currentPath: pane.currentPath)
     }
 
     /// Matches a fresh `ClientDiscovery.scan()` by **session name**, not "the only client" or

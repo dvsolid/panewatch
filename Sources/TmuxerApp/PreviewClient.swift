@@ -54,7 +54,7 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
 
     private let lifecycle: PreviewClientLifecycle
     private let tmuxPath: String
-    private var groupName: String?
+    private var groupSession: PreviewClientLifecycle.GroupSession?
     private var spawnedAt: Date?
     private var didReportOutcome = false
 
@@ -100,7 +100,7 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         // non-Sendable `self` needs to cross an isolation boundary.
         Task { @MainActor [weak self] in
             do {
-                let groupName = try await Task.detached {
+                let groupSession = try await Task.detached {
                     try lifecycle.prepareGroupSession(paneID: paneID)
                 }.value
                 guard let self, !self.didReportOutcome else {
@@ -108,11 +108,11 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
                     // or an outcome already reported some other way — clean up the group
                     // session that just got created rather than leaking it or racing a
                     // terminal view that's already been torn down.
-                    lifecycle.teardownGroupSession(groupName)
+                    lifecycle.teardownGroupSession(groupSession)
                     return
                 }
-                self.groupName = groupName
-                let invocation = PreviewClientInvocation.attachInvocation(tmuxPath: tmuxPath, groupName: groupName)
+                self.groupSession = groupSession
+                let invocation = PreviewClientInvocation.attachInvocation(tmuxPath: tmuxPath, groupName: groupSession.groupName)
                 self.terminalView.startProcess(executable: invocation.executable, args: invocation.arguments)
             } catch {
                 self?.reportOutcome(.unavailable)
@@ -133,10 +133,10 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         didReportOutcome = true
         onOutcome = nil
         terminalView.terminate()
-        guard let groupName else { return {} }
-        self.groupName = nil
+        guard let groupSession else { return {} }
+        self.groupSession = nil
         let lifecycle = lifecycle
-        return { lifecycle.teardownGroupSession(groupName) }
+        return { lifecycle.teardownGroupSession(groupSession) }
     }
 
     /// Fully synchronous teardown, including the blocking `kill-session` spawn — for the one

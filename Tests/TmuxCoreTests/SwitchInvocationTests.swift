@@ -8,7 +8,7 @@ import Testing
 /// every branch that reaches it. Mirrors `PreviewClientInvocationTests`' discipline: assert
 /// on the exact vector/script text without spawning a process or an AppleScript runtime.
 @Suite struct SwitchInvocationTests {
-    private static let target = PaneTarget(paneId: "%51", sessionName: "wgt", windowIndex: 2, paneIndex: 1)
+    private static let target = PaneTarget(paneId: "%51", sessionName: "wgt", windowIndex: 2, paneIndex: 1, currentPath: "/Users/user/Projects/acme/quotegen")
 
     /// SPEC §4 step 1's first command — built from `sessionName:windowIndex`, never a bare
     /// pane id or `window_name` (SPEC §3.4's dotted-window-name ambiguity).

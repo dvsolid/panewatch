@@ -1,6 +1,18 @@
 import AppKit
 import TmuxCore
 
+/// `card`'s concrete type (see `TileCardView.view`) — overrides `acceptsFirstMouse` so
+/// TASK-020's double-click gesture recognizer actually receives clicks. `FloatingPanel.
+/// canBecomeKey` is hard-wired `false` (the panel must never steal focus/key status), so it can
+/// never become key; AppKit's default for any view in a non-key window is to swallow the first
+/// click purely to give the window attention rather than deliver a real `mouseDown`, unless the
+/// hit view opts out via this override. Hover (`NSTrackingArea`) was never affected by this —
+/// tracking-area events bypass the key-window click-swallowing path entirely — which is why
+/// hover always worked while double-click silently never fired.
+private final class TileCardContainerView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Owns one Tile's visual composition — badge, label, task text, translucent glass card
 /// material, and the Activity Indicator's pulse. `FloatingPanel`'s sole renderer of a Tile
 /// (feature spec § Architecture): keeps glyph resolution, layout math, and
@@ -120,7 +132,7 @@ final class TileCardView {
     ///   `cardSize.height` — never adaptive.
     init(width: CGFloat = cardSize.width) {
         let center = NSPoint(x: width - Self.dotMargin - Self.dotMaxSize / 2, y: Self.headerRowCenterY)
-        let card = NSView(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.cardSize.height)))
+        let card = TileCardContainerView(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.cardSize.height)))
         card.wantsLayer = true
         card.layer?.cornerRadius = Self.cornerRadius
         card.layer?.masksToBounds = true

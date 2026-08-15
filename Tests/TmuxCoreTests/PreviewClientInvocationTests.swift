@@ -56,6 +56,22 @@ import Testing
         #expect(PreviewClientInvocation.selectPaneArguments(paneID: "%51") == ["select-pane", "-t", "%51"])
     }
 
+    /// Targets the group, not a bare pane id — reads whatever window `selectWindowArguments`
+    /// last pointed the group's own current-window pointer at.
+    @Test func zoomedQueryArgumentsTargetsTheGroupAndReadsTheZoomedFlag() {
+        #expect(
+            PreviewClientInvocation.zoomedQueryArguments(groupName: "tmuxer-preview-51")
+                == ["display-message", "-p", "-t", "tmuxer-preview-51", "#{window_zoomed_flag}"]
+        )
+    }
+
+    @Test func toggleZoomArgumentsTargetsTheGroupWithResizePaneZ() {
+        #expect(
+            PreviewClientInvocation.toggleZoomArguments(groupName: "tmuxer-preview-51")
+                == ["resize-pane", "-Z", "-t", "tmuxer-preview-51"]
+        )
+    }
+
     @Test func killGroupArgumentsTargetsTheGroupSessionByName() {
         #expect(PreviewClientInvocation.killGroupArguments(groupName: "tmuxer-preview-51") == ["kill-session", "-t", "tmuxer-preview-51"])
     }

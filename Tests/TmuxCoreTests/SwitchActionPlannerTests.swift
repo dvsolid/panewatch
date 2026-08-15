@@ -8,7 +8,7 @@ import Testing
 /// `osacompile` against the real per-app dictionaries, not at test time (see this task's
 /// Implementation notes).
 @Suite struct SwitchActionPlannerTests {
-    private let target = PaneTarget(paneId: "%51", sessionName: "ztest1", windowIndex: 2, paneIndex: 1)
+    private let target = PaneTarget(paneId: "%51", sessionName: "ztest1", windowIndex: 2, paneIndex: 1, currentPath: "/Users/user/Projects/acme/ztest1")
 
     @Test func noAttachedClientOpensNew() {
         let planner = SwitchActionPlanner()
@@ -70,5 +70,52 @@ import Testing
         }
 
         #expect(Set(scripts).count == scripts.count)
+    }
+
+    /// Ghostty's script has no `tty` term to search by (see `ghosttyScript`'s doc comment), so
+    /// it must try, in order: an exact title match against the tab's freshly-attached title,
+    /// then a working-directory match, then fall back to a bare `activate`. This only checks
+    /// script *shape* (both match clauses present, in order, `activate` last) — the match
+    /// actually working was verified live against the real, currently-installed Ghostty.
+    @Test func ghosttyScriptTriesTitleThenWorkingDirectoryThenActivate() {
+        let planner = SwitchActionPlanner()
+        let client = AttachedClient(tty: "/dev/ttys030", owningApp: .ghostty(pid: 1))
+
+        guard case .focusExisting(_, let script) = planner.plan(target: target, attachedClient: client) else {
+            Issue.record("expected .focusExisting")
+            return
+        }
+
+        #expect(script.contains("\"tmux attach -t ztest1\""))
+        #expect(script.contains("\"/Users/user/Projects/acme/ztest1\""))
+        #expect(script.contains("activate"))
+        let titleClauseIndex = try! #require(script.range(of: "tmux attach -t ztest1"))
+        let pathClauseIndex = try! #require(script.range(of: "/Users/user/Projects/acme/ztest1"))
+        let activateIndex = try! #require(script.range(of: "activate"))
+        #expect(titleClauseIndex.lowerBound < pathClauseIndex.lowerBound)
+        #expect(pathClauseIndex.lowerBound < activateIndex.lowerBound)
+    }
+
+    /// A session name or path containing a double quote or backslash must not break out of the
+    /// AppleScript string literal it's embedded in — this is the one input to this whole flow
+    /// that isn't tightly formatted (unlike tty), so it's the one that needs escaping.
+    @Test func ghosttyScriptEscapesQuotesAndBackslashesInSessionNameAndPath() {
+        let planner = SwitchActionPlanner()
+        let target = PaneTarget(
+            paneId: "%99",
+            sessionName: "weird\"name",
+            windowIndex: 1,
+            paneIndex: 1,
+            currentPath: "/Users/user/back\\slash"
+        )
+        let client = AttachedClient(tty: "/dev/ttys031", owningApp: .ghostty(pid: 1))
+
+        guard case .focusExisting(_, let script) = planner.plan(target: target, attachedClient: client) else {
+            Issue.record("expected .focusExisting")
+            return
+        }
+
+        #expect(script.contains("tmux attach -t weird\\\"name"))
+        #expect(script.contains("/Users/user/back\\\\slash"))
     }
 }

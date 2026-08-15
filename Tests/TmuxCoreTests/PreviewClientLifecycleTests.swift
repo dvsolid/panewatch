@@ -56,20 +56,53 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         return gateway
     }
 
+    /// Default `ScriptedTmuxGateway` response for an unscripted call is `""`, which
+    /// `zoomedQueryArguments` reads as "not zoomed" (anything other than the literal `"1"`) —
+    /// every test in this file that doesn't care about zoom relies on that default to reach
+    /// the toggle-zoom call deterministically.
     @Test func prepareGroupSessionRunsStepsInOrderAndReturnsTheGroupName() throws {
         let gateway = makeGatewayWithExistingPane(windowIndex: 2)
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
         let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
-        #expect(result == groupName)
+        #expect(result == PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true))
         #expect(gateway.calls == [
             PreviewClientInvocation.paneLookupArguments(paneID: paneID),
             PreviewClientInvocation.killGroupArguments(groupName: groupName),
             PreviewClientInvocation.createGroupArguments(paneID: paneID, groupName: groupName),
             PreviewClientInvocation.selectWindowArguments(groupName: groupName, windowIndex: 2),
-            PreviewClientInvocation.selectPaneArguments(paneID: paneID)
+            PreviewClientInvocation.selectPaneArguments(paneID: paneID),
+            PreviewClientInvocation.zoomedQueryArguments(groupName: groupName),
+            PreviewClientInvocation.toggleZoomArguments(groupName: groupName)
         ])
+    }
+
+    /// The window came in already zoomed (e.g. the user zoomed it themselves before hovering)
+    /// — must not toggle again, and must report `zoomedByUs: false` so teardown leaves the
+    /// user's own zoom alone.
+    @Test func prepareGroupSessionSkipsZoomWhenWindowIsAlreadyZoomed() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        gateway.setResponse("1", for: PreviewClientInvocation.zoomedQueryArguments(groupName: groupName))
+        let lifecycle = PreviewClientLifecycle(gateway: gateway)
+
+        let result = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(result.zoomedByUs == false)
+        #expect(!gateway.calls.contains(PreviewClientInvocation.toggleZoomArguments(groupName: groupName)))
+    }
+
+    /// Zoom is best-effort — a failed query must not fail the whole prepare, just skip
+    /// zooming (the popup falls back to showing the whole tiled window).
+    @Test func prepareGroupSessionSucceedsWithZoomedByUsFalseWhenTheZoomQueryFails() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        gateway.fail(PreviewClientInvocation.zoomedQueryArguments(groupName: groupName))
+        let lifecycle = PreviewClientLifecycle(gateway: gateway)
+
+        let result = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(result.groupName == groupName)
+        #expect(result.zoomedByUs == false)
     }
 
     /// Guards the phantom-session hazard directly: `new-session -t <bogus-pane>` does not
@@ -113,7 +146,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
         let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
-        #expect(result == groupName)
+        #expect(result.groupName == groupName)
     }
 
     /// A failure after the group session was created (e.g. `select-window` failing) must not
@@ -137,9 +170,24 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let gateway = ScriptedTmuxGateway()
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(groupName)
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false))
 
         #expect(gateway.calls == [PreviewClientInvocation.killGroupArguments(groupName: groupName)])
+    }
+
+    /// The mirror image of the happy-path test above: when `prepareGroupSession` did zoom the
+    /// window, teardown must restore it — and must do so *before* killing the group session,
+    /// while `-t <groupName>` can still resolve the target window.
+    @Test func teardownGroupSessionRestoresZoomWhenPrepareZoomedIt() {
+        let gateway = ScriptedTmuxGateway()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway)
+
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true))
+
+        #expect(gateway.calls == [
+            PreviewClientInvocation.toggleZoomArguments(groupName: groupName),
+            PreviewClientInvocation.killGroupArguments(groupName: groupName)
+        ])
     }
 
     /// Teardown for a group session that never got created (prepare failed before step 3)
@@ -150,6 +198,6 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         gateway.fail(PreviewClientInvocation.killGroupArguments(groupName: groupName))
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(groupName)
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false))
     }
 }
