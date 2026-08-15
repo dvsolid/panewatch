@@ -12,7 +12,7 @@ private let fixtureHostname = "LMYG2LW3F"
 /// walked in tests)." A class (not a struct) so the call log survives across the multiple
 /// `classify()` invocations a caching test needs to make against one shared `AgentDetector`.
 private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
-    private let argvByPID: [Int32: [String]]
+    private var argvByPID: [Int32: [String]]
     private var callCounts: [Int32: Int] = [:]
     /// Number of times `descendantArgv(of:)` itself was invoked — i.e. how many `ps -A`-
     /// equivalent snapshots this simulates, regardless of how many pids were in each batch.
@@ -27,6 +27,7 @@ private final class FakeDescendantProcessInspector: DescendantProcessInspector, 
         lock.lock()
         batchCallCount += 1
         for pid in pids { callCounts[pid, default: 0] += 1 }
+        let argvByPID = self.argvByPID
         lock.unlock()
         var result: [Int32: [String]] = [:]
         for pid in pids { result[pid] = argvByPID[pid] ?? [] }
@@ -37,6 +38,15 @@ private final class FakeDescendantProcessInspector: DescendantProcessInspector, 
         lock.lock()
         defer { lock.unlock() }
         return callCounts[pid] ?? 0
+    }
+
+    /// Mutates canned argv for one pid mid-test — TASK-013's no-memoization acceptance: a pane's
+    /// live agent descendant disappearing between two `classify()` passes must change pass 2's
+    /// output without touching pass 1's, which a permanently-cached fake couldn't simulate.
+    func setArgv(_ argv: [String], for pid: Int32) {
+        lock.lock()
+        argvByPID[pid] = argv
+        lock.unlock()
     }
 }
 
@@ -56,12 +66,22 @@ private let groupDuplicatePaneRow = "%51|t2q-2|1|2.1.228|2|2.1.222|✳ Investiga
 /// Tile, and that `pane_current_command` never drives a positive ID on its own (SPEC §2).
 private let ambiguousPaneRow = "%99|qtc-auto|1|main|4|node|dev-server|9001|/dev/ttys099|/Users/dmitryv/Work/Projects/billing/qtc-ops-automation|0||0"
 
-/// Default descendant inspector for tests that aren't exercising the fallback: returns no argv
-/// for any pid, so every pane that reaches ladder step 2 resolves to "no agent descendant"
-/// (acceptance item 2's shape) without any test accidentally walking a real process tree.
+/// Default descendant inspector for tests that aren't exercising the fallback or TASK-013
+/// corroboration directly. Every ladder-step-2-eligible pid (not seeded below) resolves to "no
+/// agent descendant" (acceptance item 2's shape). The captured fixture's title-matched panes
+/// (`%29`/`%54` pi, `%9`/`%51` claude) are seeded with a live descendant of the *matching* type
+/// — this is a live capture, so these agents were genuinely running — so that TASK-013's
+/// corroboration doesn't demote them and every test written before TASK-013 keeps passing for
+/// the same reason it always did (the title), not because corroboration happens to be
+/// type-agnostic. A test exercising corroboration itself configures its own inspector instead.
 private func classify(
     _ output: String,
-    descendantInspector: any DescendantProcessInspector = FakeDescendantProcessInspector()
+    descendantInspector: any DescendantProcessInspector = FakeDescendantProcessInspector(argvByPID: [
+        25236: ["/usr/local/bin/pi"], // %29
+        29302: ["/usr/local/bin/pi"], // %54
+        8569: ["/usr/local/bin/claude"], // %9
+        54430: ["/usr/local/bin/claude"], // %51
+    ])
 ) throws -> [AgentPane] {
     try AgentDetector(hostname: fixtureHostname, descendantInspector: descendantInspector)
         .classify(PaneDiscovery.parse(output))
@@ -232,6 +252,64 @@ private func classify(
         #expect(firstPass.first { $0.id == "%28" } == nil)
         #expect(secondPass.first { $0.id == "%28" } == nil)
         #expect(inspector.batchCallCount == 2) // retried both passes, not cached after the first
+    }
+
+    // MARK: - TASK-013: corroborate title-matched panes against a live descendant process
+
+    /// Acceptance item 1: `%29` (title `π - rc-billing-advisor`, pid 25236) is a title match,
+    /// but its only descendant here is a plain shell tool — no live `pi`/`claude` process.
+    /// tmux's sticky `pane_title` (this task's motivating bug) means the title alone is no
+    /// longer trustworthy, so the pane must be excluded, not classified.
+    @Test func titleMatchedPaneWithNoLiveAgentDescendantIsExcluded() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [25236: ["/bin/zsh", "/usr/bin/less"]])
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        #expect(panes.first { $0.id == "%29" } == nil)
+    }
+
+    /// Acceptance item 2 (regression guard): the common case — `cmd=zsh` at the pane's top
+    /// level, the agent running as a live child of that shell — still classifies normally. This
+    /// is the same shape as `%54`'s captured reality (live investigation: `pi` a child of the
+    /// pane's own pid) and must not be broken by adding corroboration.
+    @Test func titleMatchedPaneWithLiveAgentDescendantIsStillClassified() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [25236: ["/usr/local/bin/pi"]])
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        let pi = try #require(panes.first { $0.id == "%29" })
+        #expect(pi.type == .pi)
+    }
+
+    /// Acceptance item 3: when the descendant-process snapshot fails to run for the pane's pid
+    /// in a given pass (pid absent from the batch result, `DescendantProcessInspector`'s
+    /// documented "walk didn't run" signal), the title-matched pane is NOT demoted — it keeps
+    /// its title-based classification for that pass, fail-open, same contract as the
+    /// fallback-ladder step.
+    @Test func titleMatchedPaneKeepsClassificationWhenSnapshotFails() throws {
+        let inspector = FailingDescendantProcessInspector()
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        #expect(panes.first { $0.id == "%29" } != nil)
+    }
+
+    /// Corroboration must run every `classify()` pass, not be memoized for the pane's lifetime
+    /// like the fallback ladder's `DescendantWalkCache` — unlike "does this shell wrap an
+    /// agent" (stable for the pane's life), "is that agent still alive" can change between
+    /// passes. Same `AgentDetector`/pane across two passes: alive on pass 1, dead on pass 2 —
+    /// the pane must disappear on pass 2, proving the first pass's result wasn't cached.
+    @Test func titleMatchCorroborationIsNotMemoizedAcrossPasses() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [25236: ["/usr/local/bin/pi"]])
+        let detector = AgentDetector(hostname: fixtureHostname, descendantInspector: inspector)
+        let rawPanes = try PaneDiscovery.parse(capturedPaneListFixture)
+
+        let firstPass = detector.classify(rawPanes)
+        inspector.setArgv([], for: 25236) // agent process has since exited
+        let secondPass = detector.classify(rawPanes)
+
+        #expect(firstPass.first { $0.id == "%29" } != nil)
+        #expect(secondPass.first { $0.id == "%29" } == nil)
     }
 }
 

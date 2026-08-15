@@ -49,12 +49,13 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Caches descendant-walk results per `pane_id`, class-backed (a reference type) so the cache
-/// survives across repeated `AgentDetector.classify()` calls on the same detector instance
-/// despite `AgentDetector`'s value semantics — SPEC §2: "run it once per newly-seen pane_id and
-/// cache the result for the pane's lifetime," which spans many discovery passes (TASK-006), not
-/// one. Lock-protected because `AgentDetector` is `Sendable` and must stay safe if discovery
-/// and probe timers ever call it from different tasks.
+/// Caches ladder step 3's fallback-walk results per `pane_id` — never title-match corroboration
+/// (TASK-013), which is deliberately re-walked every pass — class-backed (a reference type) so
+/// the cache survives across repeated `AgentDetector.classify()` calls on the same detector
+/// instance despite `AgentDetector`'s value semantics — SPEC §2: "run it once per newly-seen
+/// pane_id and cache the result for the pane's lifetime," which spans many discovery passes
+/// (TASK-006), not one. Lock-protected because `AgentDetector` is `Sendable` and must stay safe
+/// if discovery and probe timers ever call it from different tasks.
 ///
 /// `walked`/`resolvedType` are two parallel collections rather than one `[String: AgentType?]`
 /// (double-optional) so "walked, found nothing" and "not walked yet" read as distinct states
@@ -85,7 +86,10 @@ private final class DescendantWalkCache: @unchecked Sendable {
 /// descendant-process fallback, and `pane_id` dedup across session groups (SPEC §2, §2.1).
 ///
 /// **Ladder:**
-/// 1. Title pattern (`π`/`✳ ` prefix) — free, comes with the `list-panes` format string.
+/// 1. Title pattern (`π`/`✳ ` prefix) — comes free with the `list-panes` format string, but not
+///    final: corroborated against a live agent descendant every pass (TASK-013), since tmux's
+///    `pane_title` is sticky and outlives the process that set it. Uncached, unlike step 3 below
+///    — see `detectType`'s `.matched` case.
 /// 2. Negative signal: `pane_title` equal to `hostname` or `:<path>`-prefixed — tmux's default
 ///    for a pane nothing has branded (SPEC §2). Excluded without a descendant walk.
 /// 3. Descendant-process fallback (SPEC §2 ladder step 2), cached per `pane_id` — every
@@ -108,16 +112,25 @@ public struct AgentDetector: Sendable {
     }
 
     public func classify(_ panes: [RawPane]) -> [AgentPane] {
-        // Ladder step 2 needs at most one descendant-process walk per discovery pass, not one
-        // per pane: `descendantArgv(of:)` snapshots the entire process table regardless of how
-        // many pids it's asked about, so gather every uncached fallback-eligible pid first and
-        // walk them together (TASK-004's measured cost: ~50ms warm per `ps -A` spawn, so N
-        // spawns per pass collapses to 1).
+        // One descendant-process walk per discovery pass covers both ladder step 1's
+        // corroboration and step 2's fallback: `descendantArgv(of:)` snapshots the entire
+        // process table regardless of how many pids it's asked about, so gather every pid that
+        // needs a walk this pass first and walk them together (TASK-004's measured cost: ~50ms
+        // warm per `ps -A` spawn, so N spawns per pass collapses to 1). Title matches are added
+        // unconditionally, every pass, uncached — see `detectType`'s `.matched` case for why.
+        // Fallback-ladder pids are added only when uncached, since that resolution is memoized
+        // for the pane's lifetime.
         var pidsNeedingWalk: Set<Int32> = []
         for pane in panes {
-            guard case .needsDescendantWalk = titleSignal(pane) else { continue }
-            let (walked, _) = cache.lookup(pane.paneId)
-            if !walked { pidsNeedingWalk.insert(pane.pid) }
+            switch titleSignal(pane) {
+            case .matched:
+                pidsNeedingWalk.insert(pane.pid)
+            case .needsDescendantWalk:
+                let (walked, _) = cache.lookup(pane.paneId)
+                if !walked { pidsNeedingWalk.insert(pane.pid) }
+            case .excluded:
+                continue
+            }
         }
         let batchArgv = pidsNeedingWalk.isEmpty ? [:] : descendantInspector.descendantArgv(of: pidsNeedingWalk)
 
@@ -158,7 +171,17 @@ public struct AgentDetector: Sendable {
     private func detectType(_ pane: RawPane, batchArgv: [Int32: [String]]) -> (type: AgentType, matchedTitle: Bool)? {
         switch titleSignal(pane) {
         case .matched(let type):
-            return (type, true)
+            // A title match is corroborated against a live descendant, not treated as final —
+            // tmux's `pane_title` is sticky (this task's motivating bug: a title set by an agent
+            // that has since exited never clears). Uncached, unlike ladder step 2's fallback
+            // resolution: "does this shell wrap an agent" is stable for the pane's life, but "is
+            // that agent still alive" is not, so this must be re-checked every pass.
+            //
+            // A pid absent from `batchArgv` means the walk didn't run this pass (e.g. the `ps`
+            // snapshot failed) — fail open and keep the title-based classification rather than
+            // demoting on a snapshot failure.
+            guard let argv = batchArgv[pane.pid] else { return (type, true) }
+            return Self.matchAgentType(argv: argv) != nil ? (type, true) : nil
         case .excluded:
             return nil
         case .needsDescendantWalk:
@@ -176,7 +199,8 @@ public struct AgentDetector: Sendable {
         }
     }
 
-    /// Executable-basename markers for SPEC §2 ladder step 2. Basename equality, not substring
+    /// Executable-basename markers for SPEC §2 ladder step 2, also reused by ladder step 1's
+    /// title-match corroboration (TASK-013). Basename equality, not substring
     /// containment: a substring search for `"pi"` would false-positive on `pip`,
     /// `raspi-config`, anything with "pi" inside a longer name — the same class of loose-match
     /// mistake SPEC calls out for the Claude Code version string.

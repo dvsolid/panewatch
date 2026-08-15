@@ -53,11 +53,40 @@ private let claudeTaskOne = paneLine(id: "%1", paneIndex: 1, title: "✳ task-on
 private let claudeTaskThree = paneLine(id: "%3", paneIndex: 3, title: "✳ task-three", pid: 300)
 private let piTaskTwo = paneLine(id: "%2", paneIndex: 2, command: "zsh", title: "π - proj", pid: 200)
 
+/// TASK-013: title matches are now corroborated against a live agent descendant every
+/// `classify()` pass, so `AgentDetector`'s default `ProcessTableDescendantInspector` (a real
+/// `ps` walk) would find none of these synthetic pids and silently exclude every Tile these
+/// tests expect. Stands in a live descendant of the matching type for each fixture pane, same
+/// as `AgentDetectorTests`' shared default fake.
+private let fakeDescendantInspector = FakeDescendantProcessInspector(argvByPID: [
+    100: ["/usr/local/bin/claude"], // %1
+    200: ["/usr/local/bin/pi"], // %2
+    300: ["/usr/local/bin/claude"], // %3
+])
+
+private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
+    private let argvByPID: [Int32: [String]]
+
+    init(argvByPID: [Int32: [String]]) {
+        self.argvByPID = argvByPID
+    }
+
+    func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
+        var result: [Int32: [String]] = [:]
+        for pid in pids { result[pid] = argvByPID[pid] ?? [] }
+        return result
+    }
+}
+
 private func makeEngine(
     gateway: FakeTmuxGateway,
     activitySource: FakeActivitySource = FakeActivitySource()
 ) -> StatusBarEngine {
-    StatusBarEngine(discovery: PaneDiscovery(gateway: gateway), activitySource: activitySource)
+    StatusBarEngine(
+        discovery: PaneDiscovery(gateway: gateway),
+        detector: AgentDetector(descendantInspector: fakeDescendantInspector),
+        activitySource: activitySource
+    )
 }
 
 /// Acceptance item 1: a pane that appears in a later discovery pass (simulating a newly

@@ -28,10 +28,12 @@ public protocol DescendantProcessInspector: Sendable {
 /// Implementation decisions).
 ///
 /// One `ps` spawn per call, regardless of how many pids are in the batch — this is SPEC §2's
-/// "only expensive step" in the detection ladder; `AgentDetector` caches results per `pane_id`
-/// so a given pane only ever pays for this once (SPEC §2: "run it once per newly-seen pane_id
-/// and cache the result for the pane's lifetime") and batches every uncached pane needing a walk
-/// into one call per discovery pass.
+/// "only expensive step" in the detection ladder. `AgentDetector` caches the fallback ladder
+/// step's result per `pane_id` so a given pane only ever pays for *that* resolution once (SPEC
+/// §2: "run it once per newly-seen pane_id and cache the result for the pane's lifetime") — but
+/// title-match corroboration (TASK-013) is deliberately uncached, since it re-checks whether an
+/// already-classified agent is still alive, not whether a shell wraps one. Either way, every pid
+/// needing a walk this pass — cached-fallback-eligible or not — batches into one call.
 public struct ProcessTableDescendantInspector: DescendantProcessInspector {
     public init() {}
 
