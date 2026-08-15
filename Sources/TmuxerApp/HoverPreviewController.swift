@@ -471,26 +471,16 @@ final class HoverPreviewController: NSResponder {
         }
     }
 
-    /// Ghostty is `openNewAction`'s default target for `.none`/`.ghostty` — the only one of the
-    /// three supported apps that opens via a plain process launch with zero Automation-
-    /// permission cost. That default silently no-ops on a machine without Ghostty installed
-    /// (whole-branch review finding). Falls back to Terminal.app, which ships on every Mac, in
-    /// that case — `TerminalAppCatalog.defaultOpenNewApp` (ADR-0003) owns that fallback logic;
-    /// this method supplies the AppKit-backed availability check `TmuxCore` can't perform
-    /// itself (CLAUDE.md: "TmuxCore must stay free of AppKit"). `.iTerm2`/`.terminalApp`
-    /// preferences are left untouched — those are only ever set from an app `TTYOwnerResolver`
-    /// already found running, so no availability check is needed for them.
-    nonisolated private static func resolveOpenNewPreferredApp(_ preferredApp: SupportedTerminalApp?) -> SupportedTerminalApp? {
-        switch preferredApp {
-        case .none, .ghostty, .cursor:
-            // `.cursor` has no open-new mechanism (TASK-022) — routes through the same
-            // availability-checked default as "no client attached at all", never a
-            // Cursor-specific path.
-            return TerminalAppCatalog.defaultOpenNewApp {
-                NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil
-            }
-        case .iTerm2, .terminalApp:
-            return preferredApp
+    /// Resolves the caller's preference through `TerminalAppCatalog.resolveOpenNewApp`, supplying
+    /// only the AppKit-backed availability check `TmuxCore` can't perform itself (CLAUDE.md:
+    /// "TmuxCore must stay free of AppKit") — which apps fall back to the availability-checked
+    /// default (no preference, no open-new mechanism at all, or Ghostty's silently-no-ops-if-
+    /// uninstalled launch) versus pass through unchanged is the catalog's call, not this call
+    /// site's (whole-branch review finding: this used to be a second exhaustive switch over
+    /// `SupportedTerminalApp`, duplicating `profile(for:)`'s).
+    nonisolated private static func resolveOpenNewPreferredApp(_ preferredApp: SupportedTerminalApp?) -> SupportedTerminalApp {
+        TerminalAppCatalog.resolveOpenNewApp(preferred: preferredApp) {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil
         }
     }
 

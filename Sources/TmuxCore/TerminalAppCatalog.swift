@@ -1,9 +1,11 @@
 /// The single ordered registry of every `TerminalAppProfile` — the one place that answers
 /// "which app owns this basename," "what does this app's focus-script/open-new mechanism look
-/// like," and "what's the default open-new target." `TTYOwnerResolver.matchTerminalApp`,
-/// `SwitchActionPlanner.focusScript`, `SwitchInvocation.openNewAction`, and
-/// `HoverPreviewController.resolveOpenNewPreferredApp` all query this instead of switching over
-/// `SupportedTerminalApp` cases independently — ADR-0003, TASK-021. `SupportedTerminalApp`
+/// like," and "what's the default (and preference-resolved) open-new target."
+/// `TTYOwnerResolver.matchTerminalApp`, `SwitchActionPlanner.focusScript`,
+/// `SwitchInvocation.openNewAction`, and `HoverPreviewController.resolveOpenNewPreferredApp`
+/// all query this instead of switching over `SupportedTerminalApp` cases independently —
+/// ADR-0003, TASK-021, and `resolveOpenNewApp` below (whole-branch review finding: TASK-021
+/// left `HoverPreviewController`'s own exhaustive switch in place). `SupportedTerminalApp`
 /// itself stays a small identity enum; `profile(for:)` is the sole remaining exhaustive switch
 /// over it.
 public enum TerminalAppCatalog {
@@ -33,7 +35,8 @@ public enum TerminalAppCatalog {
                 executable: "/usr/bin/open",
                 arguments: ["-n", "-a", "Ghostty", "--args", "-e", tmuxPath, "attach", "-t", paneId]
             )
-        }
+        },
+        requiresOpenNewAvailabilityCheck: true
     )
 
     /// iTerm2's `session` class exposes a read-only `tty` property (`iTerm2.sdef`), and
@@ -110,6 +113,29 @@ public enum TerminalAppCatalog {
     /// check lives at `HoverPreviewController`'s call site.
     public static func defaultOpenNewApp(isGhosttyAvailable: () -> Bool) -> SupportedTerminalApp {
         isGhosttyAvailable() ? .ghostty(pid: -1) : .terminalApp(pid: -1)
+    }
+
+    /// Resolves which app `SwitchInvocation.openNewAction` should actually target, given a
+    /// caller's preferred app (if any). Falls back to `defaultOpenNewApp(isGhosttyAvailable:)`
+    /// when `preferred` is `nil`, when its profile has no `openNewAction` at all (Cursor,
+    /// TASK-022), or when its profile demands re-validating availability before use
+    /// (`requiresOpenNewAvailabilityCheck` — Ghostty); otherwise `preferred` passes through
+    /// unchanged. This is what `HoverPreviewController.resolveOpenNewPreferredApp` used to
+    /// compute via its own exhaustive switch over `SupportedTerminalApp` (whole-branch review
+    /// finding) — moving it here means a fifth app costs exactly the profile entry `all`
+    /// already requires, same as ADR-0003 promises for `profile(for:)`.
+    public static func resolveOpenNewApp(
+        preferred: SupportedTerminalApp?,
+        isGhosttyAvailable: () -> Bool
+    ) -> SupportedTerminalApp {
+        guard let preferred else {
+            return defaultOpenNewApp(isGhosttyAvailable: isGhosttyAvailable)
+        }
+        let candidate = profile(for: preferred)
+        guard candidate.openNewAction != nil, !candidate.requiresOpenNewAvailabilityCheck else {
+            return defaultOpenNewApp(isGhosttyAvailable: isGhosttyAvailable)
+        }
+        return preferred
     }
 
     private static func ghosttyFocusScript(sessionName: String, currentPath: String, tty: String) -> String {

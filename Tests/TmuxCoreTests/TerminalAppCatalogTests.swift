@@ -125,4 +125,42 @@ import Testing
     @Test func defaultOpenNewAppFallsBackToTerminalAppWhenGhosttyUnavailable() {
         #expect(TerminalAppCatalog.defaultOpenNewApp(isGhosttyAvailable: { false }) == .terminalApp(pid: -1))
     }
+
+    // MARK: - resolveOpenNewApp(preferred:isGhosttyAvailable:)
+    //
+    // This is what `HoverPreviewController.resolveOpenNewPreferredApp` used to compute via its
+    // own exhaustive switch over `SupportedTerminalApp` before the whole-branch review finding
+    // that centralized it here — these tests are the regression proof that moving it didn't
+    // change any of its four branches' behavior.
+
+    @Test func resolveOpenNewAppFallsBackToDefaultWhenNoPreference() {
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: nil, isGhosttyAvailable: { true }) == .ghostty(pid: -1))
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: nil, isGhosttyAvailable: { false }) == .terminalApp(pid: -1))
+    }
+
+    /// Cursor's profile has no `openNewAction` at all — the case a bare "does its profile
+    /// require an availability check" test wouldn't catch, since `requiresOpenNewAvailabilityCheck`
+    /// is `false` for Cursor too. This is the fallback-when-no-mechanism branch the finding
+    /// asked for explicitly.
+    @Test func resolveOpenNewAppFallsBackToDefaultWhenPreferredHasNoOpenNewAction() {
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .cursor(pid: 4), isGhosttyAvailable: { true }) == .ghostty(pid: -1))
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .cursor(pid: 4), isGhosttyAvailable: { false }) == .terminalApp(pid: -1))
+    }
+
+    /// Ghostty has an `openNewAction` but its profile sets `requiresOpenNewAvailabilityCheck`
+    /// — a stale/unverified preference for it must still be re-validated, so it routes through
+    /// the default rather than passing through with its original pid.
+    @Test func resolveOpenNewAppRoutesGhosttyPreferenceThroughTheAvailabilityCheckedDefault() {
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .ghostty(pid: 99), isGhosttyAvailable: { true }) == .ghostty(pid: -1))
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .ghostty(pid: 99), isGhosttyAvailable: { false }) == .terminalApp(pid: -1))
+    }
+
+    /// iTerm2/Terminal.app preferences pass through unpreferred apps that have an
+    /// `openNewAction` and don't require re-validating availability — they're only ever set
+    /// from an app `TTYOwnerResolver` already found running, so `isGhosttyAvailable` is never
+    /// consulted for them, and the original pid is preserved.
+    @Test func resolveOpenNewAppPassesThroughITerm2AndTerminalAppPreferencesUnchanged() {
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .iTerm2(pid: 7), isGhosttyAvailable: { true }) == .iTerm2(pid: 7))
+        #expect(TerminalAppCatalog.resolveOpenNewApp(preferred: .terminalApp(pid: 8), isGhosttyAvailable: { true }) == .terminalApp(pid: 8))
+    }
 }
