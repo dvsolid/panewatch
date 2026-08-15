@@ -17,6 +17,12 @@ final class FloatingPanel: NSPanel {
     /// feature (epic "Out of scope"), and a real machine can easily have more panes than fit
     /// in one screen height (verified manually against this dev machine's ~35 panes).
     private let scrollView = NSScrollView()
+    /// Owns the Hover Preview Popup's whole lifecycle (TASK-014) — `render(_:)` wires each
+    /// freshly created `TileCardView` into it and tells it when the pane set is about to change,
+    /// but never drives its show/hide/position logic directly; that's this controller's own
+    /// concern, mirroring how `FloatingPanel` itself owns window/scroll/positioning while
+    /// `TileCardView` stays visual-composition-only.
+    private let hoverController = HoverPreviewController()
 
     /// One retained `TileCardView` per rendered Tile, keyed by `pane_id` (`TileState.id`) —
     /// lets `render(_:)` and the blink timer update an existing Tile's color/text in place
@@ -195,6 +201,11 @@ final class FloatingPanel: NSPanel {
             return
         }
 
+        // TASK-014: tell the hover controller about the incoming pane set *before* the old
+        // `TileCardView`s below are discarded, so it can close/cancel any popup pointed at a
+        // pane that's about to disappear rather than being left referencing a deallocated view.
+        hoverController.tileSetWillChange(remaining: Set(ids))
+
         let width = scrollView.contentSize.width
         let idealCardSize = TileCardView.cardSize
         // `contentSize.width` already reflects whatever the vertical scroller actually costs
@@ -223,6 +234,7 @@ final class FloatingPanel: NSPanel {
             card.view.frame.origin = NSPoint(x: x, y: y)
             document.addSubview(card.view)
             card.apply(tile, blinkOn: blinkOn)
+            hoverController.attachHoverTracking(to: card.view, paneID: tile.id)
             newViews[tile.id] = card
             y -= (idealCardSize.height + spacing)
         }
