@@ -257,16 +257,25 @@ The actual mechanism is the **alternate screen**. Pane `%24` reports `alternate_
 
 ### 4. Click Behavior
 
-**Single click on tile:**
+**Double click on tile** (Tile Hover Preview & Switch epic, TASK-020): a single click is
+deliberately inert — it's too easy to land on a Tile by accident while the mouse is passing
+through on its way to the Hover Preview Popup, so activation needs the OS-native "double-click
+to open" gesture rather than a single click or a separate button target. Hovering (no click)
+instead opens a short-dwell, read-only live preview of the pane — see the feature spec for that
+behavior; this section covers only what double-click does:
 
 1. **Focus an existing client** — if the pane's session already has an attached client:
    - `tmux select-window -t '<session>:<window_index>'` then `tmux select-pane -t <pane_id>`
      (`pane_id` already carries its `%` sigil — the target is `%51`, not `%%51`. Both forms verified against the live server.)
-   - Resolve the client's `#{client_tty}` → owning terminal app, and activate that app via AppleScript.
+   - Resolve the client's `#{client_tty}` → owning terminal app (Ghostty, iTerm2, or
+     Terminal.app), then use that app's own AppleScript scripting dictionary to select the
+     matching window/tab and activate it (ADR-0002). This requires the standard per-app
+     Automation (TCC) permission prompt, not Accessibility — see §5 below.
    - **Do not use `attach` on this path.** `attach` always creates an *additional* client rather than focusing the existing one, leaving the user with two clients fighting over the same session. `select-window`/`select-pane` retarget the client that is already there.
-2. **Open a new terminal** — only when the session has no attached client:
-   - **Ghostty**: `open -a Ghostty --args -e tmux attach -t '<session>:<window_index>.<pane_index>'`
-   - **iTerm**: `open -a iTerm`, then `osascript` to write the same command to a new tab.
+2. **Open a new terminal** — when the session has no attached client, the owning app isn't one
+   of the three supported terminals, or the Automation permission prompt above is denied:
+   - **Ghostty** (default, no Automation-permission cost at all — a plain process launch, not AppleScript): `open -n -a Ghostty --args -e tmux attach -t <pane_id>`, falling back to **Terminal.app** if Ghostty isn't installed.
+   - **iTerm2** / **Terminal.app**: an AppleScript "create window with default profile command …" / "do script …" call carrying the same `tmux attach -t <pane_id>` command.
 
 **Verified:** `tmux attach -t 'session:window.pane'` does accept a pane-level target and selects that pane on attach (confirmed via `%window-pane-changed @25 %68`). The target must be built from **indices**, not names — see §3.4 on dotted window names.
 
@@ -286,10 +295,15 @@ The actual mechanism is the **alternate screen**. Pane `%24` reports `alternate_
 - Can be dragged to switch sides
 - Resizable (min 1 tile, max screen width tiles)
 
-**Accessibility permissions:**
-- Required for: controlling terminal app windows (focus, resize)
-- Required for: System Events scripting (iTerm window management)
-- Graceful degradation: if permissions denied, fall back to "open new terminal" behavior
+**Automation (TCC) permissions** (ADR-0002 — corrects an earlier assumption in this doc that
+controlling terminal windows needed Accessibility):
+- Required for: focusing a specific terminal window/tab via that app's own AppleScript
+  scripting dictionary (Ghostty, iTerm2, Terminal.app) — the mechanism §4's "focus an existing
+  client" step uses, one standard per-app Automation prompt the first time a given app is
+  scripted, not per pane.
+- Not Accessibility: precise window/tab selection is done entirely through each app's own
+  scripting dictionary, never `AXUIElement`/System Events.
+- Graceful degradation: if the Automation prompt is denied, fall back to "open new terminal" behavior (§4 path 2)
 
 ### 6. Technology Choices
 
@@ -427,7 +441,7 @@ tmux attach -t '<session>:<window_index>.<pane_index>'   # NEW client only
 - `ControlModeActivitySource` (§3.2): supervised per-session control-client pool, `%output` → timestamp
 - Reconnect on `%exit`, survive tmux server restart with backoff
 - Detect existing tmux clients via `list-clients`
-- Focus existing terminal window with `select-window`/`select-pane` + app activation (requires Accessibility)
+- Focus existing terminal window with `select-window`/`select-pane` + per-app AppleScript activation (requires Automation (TCC) permission, per terminal app — ADR-0002, not Accessibility)
 - Handle both Ghostty and iTerm
 
 *Sequenced together deliberately: both halves need the same `client_tty` → terminal-app mapping, and both are the payoff for Phase 1's seam.*

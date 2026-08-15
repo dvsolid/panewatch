@@ -168,6 +168,23 @@ private func classify(
         #expect(survivor.label == "wgt:1.2")
     }
 
+    /// Whole-branch review regression: a live Preview Client's grouped session
+    /// (`PreviewClientInvocation.groupSessionName`, e.g. `tmuxer-preview-51`) shares the
+    /// hovered pane's pane_id with its real source session while a hover popup is open, so
+    /// `list-panes -a` reports `%51` twice. `tmuxer-preview-51` sorts *after* `wgt`
+    /// alphabetically, so a naive tie-break (`groupDedupTieBreaksAlphabeticallyOnSessionName`'s
+    /// rule) would let the group's row win and relabel the Tile — this pins that the group
+    /// session is excluded outright instead, regardless of sort order, and the real session's
+    /// row always survives.
+    @Test func previewGroupSessionNeverWinsDedupTieBreak() throws {
+        let previewGroupRow = "%51|tmuxer-preview-51|1|2.1.228|2|2.1.222|✳ Investigate JIRA bug WGT-4821|54430|/dev/ttys051|/Users/user/Projects/acme/quotegen|1|tmuxer-preview-51|0|1700000000"
+
+        let panes = try classify(capturedPaneListFixture + "\n" + previewGroupRow)
+
+        let survivor = try #require(panes.first { $0.id == "%51" })
+        #expect(survivor.label == "wgt:1.2")
+    }
+
     /// Acceptance item 6: a pane whose title matches neither a title pattern nor a hostname
     /// negative signal now reaches the descendant fallback (TASK-004) instead of being
     /// excluded outright — but with no agent descendant configured on the default fake, the

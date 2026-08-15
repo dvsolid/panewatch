@@ -117,6 +117,18 @@ public struct AgentDetector: Sendable {
     }
 
     public func classify(_ panes: [RawPane]) -> [AgentPane] {
+        // Exclude a Preview Client's own synthetic grouped session (`PreviewClientInvocation
+        // .groupSessionPrefix`) before anything else — whole-branch review finding: while a
+        // hover popup is open, its group session shares the hovered pane's pane_id with the
+        // pane's real source session, so `list-panes -a` reports the same pane_id twice. Left
+        // in, the group's row can win the dedup tie-break below (it sorts after most real
+        // session names) and relabel the Tile with `tmuxer-preview-<N>:...` until the popup
+        // closes and the next discovery pass corrects it (~30s later). `session_grouped`/
+        // `session_group` can't discriminate here — tmux reports both the group and its
+        // source session as grouped once linked — so the deterministic naming convention is
+        // the only reliable signal.
+        let panes = panes.filter { !$0.sessionName.hasPrefix(PreviewClientInvocation.groupSessionPrefix) }
+
         // One descendant-process walk per discovery pass covers both ladder step 1's
         // corroboration and step 2's fallback: `descendantArgv(of:)` snapshots the entire
         // process table regardless of how many pids it's asked about, so gather every pid that

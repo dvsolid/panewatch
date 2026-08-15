@@ -180,10 +180,23 @@ final class FloatingPanel: NSPanel {
     func toggleVisibility() {
         if isVisible {
             orderOut(nil)
+            // Whole-branch review finding: hiding the panel never told the hover controller,
+            // so a popup left open at the moment of hiding kept its grouped tmux session alive
+            // (and duplicating the hovered pane's pane_id in `list-panes -a`) indefinitely —
+            // nothing else prunes it, since `tileSetWillChange` only fires from `render(_:)`.
+            hoverController.closeActivePreview()
         } else {
             setFrame(FloatingPanel.frame(on: NSScreen.main), display: true)
             orderFrontRegardless()
         }
+    }
+
+    /// Synchronous Preview Client teardown for app termination, forwarded from
+    /// `AppDelegate.applicationWillTerminate` via `StatusBarShell.prepareForTermination()`. See
+    /// `HoverPreviewController.tearDownActivePreviewSynchronously()`'s doc comment for why this
+    /// can't reuse `toggleVisibility()`'s async close path.
+    func tearDownActivePreviewForTermination() {
+        hoverController.tearDownActivePreviewSynchronously()
     }
 
     /// Renders `tiles`. When the pane set/order is unchanged from the last render (true for

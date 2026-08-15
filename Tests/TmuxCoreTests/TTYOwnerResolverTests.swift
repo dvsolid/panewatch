@@ -23,7 +23,7 @@ import Testing
         // machine (login -> Ghostty), see this task's Implementation notes.
         let ps = try makeFakePS(body: """
         echo '100 1 ??      /Applications/Ghostty.app/Contents/MacOS/ghostty'
-        echo '200 100 ttys005 login -flp dmitryv /bin/zsh'
+        echo '200 100 ttys005 login -flp devuser /bin/zsh'
         echo '300 200 ttys005 -zsh'
         """)
         let resolver = ProcessTableTTYOwnerResolver(psExecutableURL: ps)
@@ -36,7 +36,7 @@ import Testing
     @Test func ownerAncestorChainIncludingITerm2ResolvesToITerm2() throws {
         let ps = try makeFakePS(body: """
         echo '110 1 ??      /Applications/iTerm.app/Contents/MacOS/iTerm2'
-        echo '210 110 ttys006 login -flp dmitryv /bin/zsh'
+        echo '210 110 ttys006 login -flp devuser /bin/zsh'
         echo '310 210 ttys006 -zsh'
         """)
         let resolver = ProcessTableTTYOwnerResolver(psExecutableURL: ps)
@@ -49,7 +49,7 @@ import Testing
     @Test func ownerAncestorChainIncludingTerminalAppResolvesToTerminalApp() throws {
         let ps = try makeFakePS(body: """
         echo '120 1 ??      /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'
-        echo '220 120 ttys007 login -flp dmitryv /bin/zsh'
+        echo '220 120 ttys007 login -flp devuser /bin/zsh'
         echo '320 220 ttys007 -zsh'
         """)
         let resolver = ProcessTableTTYOwnerResolver(psExecutableURL: ps)
@@ -64,7 +64,7 @@ import Testing
         // terminal apps — e.g. a pane reached via ssh from an unrecognized wrapper.
         let ps = try makeFakePS(body: """
         echo '130 1 ??      /usr/libexec/some-unrelated-launcher'
-        echo '230 130 ttys008 login -flp dmitryv /bin/zsh'
+        echo '230 130 ttys008 login -flp devuser /bin/zsh'
         echo '330 230 ttys008 -zsh'
         """)
         let resolver = ProcessTableTTYOwnerResolver(psExecutableURL: ps)

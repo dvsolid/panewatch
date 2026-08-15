@@ -69,37 +69,75 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         assert(terminalView.processDelegate != nil, "PreviewClient.terminalView.processDelegate was not retained")
     }
 
-    /// Prepares the grouped session and spawns the read-only attach as `terminalView`'s child
-    /// process. Synchronous failures (tmux binary missing, or any `PreviewClientLifecycle`
-    /// step failing — e.g. the pane is already gone) report `.unavailable` immediately and
-    /// never call `startProcess` at all.
+    /// Prepares the grouped session off the main actor — `PreviewClientLifecycle
+    /// .prepareGroupSession` is five sequential blocking `Process` spawns (whole-branch review
+    /// finding: this used to run synchronously on the main actor, freezing the UI behind every
+    /// hover-open) — then hops back to spawn the read-only attach as `terminalView`'s child
+    /// process. The tmux-binary-missing check stays a cheap synchronous stat call; every other
+    /// failure (any `PreviewClientLifecycle` step failing — e.g. the pane is already gone)
+    /// reports `.unavailable` once the detached prepare comes back and never calls
+    /// `startProcess` at all.
     func start(paneID: String) {
         spawnedAt = Date()
         guard FileManager.default.isExecutableFile(atPath: tmuxPath) else {
             reportOutcome(.unavailable)
             return
         }
-        do {
-            let groupName = try lifecycle.prepareGroupSession(paneID: paneID)
-            self.groupName = groupName
-            let invocation = PreviewClientInvocation.attachInvocation(tmuxPath: tmuxPath, groupName: groupName)
-            terminalView.startProcess(executable: invocation.executable, args: invocation.arguments)
-        } catch {
-            reportOutcome(.unavailable)
+        let lifecycle = lifecycle
+        let tmuxPath = tmuxPath
+        // The outer task stays on the main actor throughout (`@MainActor`, `weak self`) — only
+        // the inner `Task.detached` runs off it, and that inner closure captures no `self` at
+        // all (just the Sendable `lifecycle`/`paneID`), so there's never a point where a
+        // non-Sendable `self` needs to cross an isolation boundary.
+        Task { @MainActor [weak self] in
+            do {
+                let groupName = try await Task.detached {
+                    try lifecycle.prepareGroupSession(paneID: paneID)
+                }.value
+                guard let self, !self.didReportOutcome else {
+                    // `stop()` already fired (popup closed while prepare was still in-flight)
+                    // or an outcome already reported some other way — clean up the group
+                    // session that just got created rather than leaking it or racing a
+                    // terminal view that's already been torn down.
+                    lifecycle.teardownGroupSession(groupName)
+                    return
+                }
+                self.groupName = groupName
+                let invocation = PreviewClientInvocation.attachInvocation(tmuxPath: tmuxPath, groupName: groupName)
+                self.terminalView.startProcess(executable: invocation.executable, args: invocation.arguments)
+            } catch {
+                self?.reportOutcome(.unavailable)
+            }
         }
     }
 
-    /// Idempotent. Terminates the child process (if still running) and tears down the grouped
-    /// session — after this returns, `tmux list-clients` no longer lists the Preview Client
-    /// (acceptance item 2).
-    func stop() {
+    /// Idempotent. Terminates the child process (if still running), clears local state, and
+    /// returns the pending grouped-session teardown (a no-op closure if no group was ever
+    /// created) instead of running it inline — `PreviewClientLifecycle.teardownGroupSession` is
+    /// a blocking `kill-session` spawn that must never run on the main actor (whole-branch
+    /// review finding), but some callers (`HoverPreviewController.tileDoubleClicked`) need that
+    /// spawn to *complete* before their own next tmux call runs, a guarantee only the caller
+    /// can enforce by awaiting the closure itself. After the returned closure runs, `tmux
+    /// list-clients` no longer lists the Preview Client (acceptance item 2).
+    @discardableResult
+    func stop() -> @Sendable () -> Void {
         didReportOutcome = true
         onOutcome = nil
         terminalView.terminate()
-        if let groupName {
-            lifecycle.teardownGroupSession(groupName)
-        }
-        groupName = nil
+        guard let groupName else { return {} }
+        self.groupName = nil
+        let lifecycle = lifecycle
+        return { lifecycle.teardownGroupSession(groupName) }
+    }
+
+    /// Fully synchronous teardown, including the blocking `kill-session` spawn — for the one
+    /// call site with no room to hop off the main actor at all: `AppDelegate
+    /// .applicationWillTerminate`, where a detached task's `kill-session` would never get to
+    /// run before the process exits (whole-branch review finding: that's exactly how a
+    /// `tmuxer-preview-*` session survives app quit indefinitely today). A brief main-actor
+    /// block during quit is an acceptable trade for not leaking the session.
+    func stopSynchronously() {
+        stop()()
     }
 
     private func reportOutcome(_ outcome: Outcome) {

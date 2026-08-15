@@ -90,6 +90,15 @@ final class StatusBarShell: NSObject {
         panel.render(engine.tiles())
     }
 
+    /// Forwarded from `AppDelegate.applicationWillTerminate` — whole-branch review finding:
+    /// without this, quitting the app (or crashing) with a hover popup open leaves its
+    /// `tmuxer-preview-*` grouped session on the tmux server indefinitely, since neither the
+    /// async close path nor the next-hover best-effort cleanup ever gets a chance to run once
+    /// the process has exited.
+    func prepareForTermination() {
+        panel.tearDownActivePreviewForTermination()
+    }
+
     @objc private func statusItemClicked() {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {

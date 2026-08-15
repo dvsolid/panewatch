@@ -36,13 +36,22 @@ import Foundation
 /// exit 1), which is why `PreviewClientLifecycle.prepareGroupSession` runs
 /// `paneLookupArguments` first, before ever creating anything.
 public enum PreviewClientInvocation {
+    /// Shared prefix of every `groupSessionName(paneID:)` result — also used by
+    /// `AgentDetector` to recognize and exclude a Preview Client's own synthetic session from
+    /// classification. While a group session is live, its shared window's pane_id appears
+    /// twice in `list-panes -a` (once under the source session, once under this group), and
+    /// without this exclusion the group's row can win `AgentDetector`'s alphabetical dedup
+    /// tie-break and relabel the Tile with the group's own session name until the popup
+    /// closes and the next discovery pass runs (whole-branch review finding).
+    public static let groupSessionPrefix = "tmuxer-preview-"
+
     /// Deterministic per-pane group-session name, so a leftover session from a previous
     /// run that didn't tear down cleanly (e.g. an app crash mid-preview) can be recognized
     /// and cleared before reuse rather than colliding with `-s <group-name>` on the next
     /// hover of the same pane. Strips the pane id's leading `%` — tmux session names don't
     /// need to carry the sigil.
     public static func groupSessionName(paneID: String) -> String {
-        "tmuxer-preview-\(paneID.dropFirst())"
+        "\(groupSessionPrefix)\(paneID.dropFirst())"
     }
 
     /// Resolves whether `paneID` still exists and, if so, which window holds it. `-t

@@ -227,45 +227,97 @@ final class HoverPreviewController: NSResponder {
         client.start(paneID: paneID)
     }
 
-    /// Idempotent. Also tears down the active Preview Client (if any) — terminates its
-    /// process and its grouped tmux session, so `tmux list-clients` no longer lists it once
-    /// this returns (acceptance item 2).
+    /// Idempotent. Also detaches the active Preview Client (if any) and fires its grouped-tmux-
+    /// session teardown in a detached task — the ordinary close path, used by every caller
+    /// that doesn't need the teardown to *complete* before some other tmux call runs
+    /// (`tileMouseEntered`'s second-Tile-hover path, `scheduleClose`, `tileSetWillChange`, the
+    /// `.closed` outcome). `tileDoubleClicked` needs that stronger guarantee and calls
+    /// `closeAndDetachClient()` directly instead — see its own doc comment.
     private func close() {
+        let teardown = closeAndDetachClient()
+        Task.detached { teardown() }
+    }
+
+    /// The state-teardown half of `close()`, factored out so `tileDoubleClicked` can await the
+    /// returned closure itself instead of racing it against a separately-dispatched
+    /// `Task.detached` (whole-branch review finding: firing both independently broke the
+    /// "teardown completes before the switch resolve begins" guarantee this method's callers
+    /// depend on). Cancels timers, hides the popup, clears `activePaneID`, and detaches
+    /// `previewClient`'s UI/process — all cheap main-actor work. The returned closure is the
+    /// one blocking piece (`PreviewClientLifecycle.teardownGroupSession`'s `kill-session`
+    /// spawn, via `PreviewClient.stop()`), left for the caller to run wherever is appropriate.
+    @discardableResult
+    private func closeAndDetachClient() -> @Sendable () -> Void {
         cancelDwell()
         cancelClose()
         activePaneID = nil
         popup?.orderOut(nil)
-        previewClient?.stop()
+        let teardown: @Sendable () -> Void
+        if let previewClient {
+            teardown = previewClient.stop()
+        } else {
+            teardown = {}
+        }
+        previewClient = nil
+        return teardown
+    }
+
+    /// `FloatingPanel.toggleVisibility()` hides the main panel with no idea whether a hover
+    /// popup is currently open — call this from there so a popup left open when the user hides
+    /// the panel doesn't leak its grouped tmux session indefinitely (whole-branch review
+    /// finding: hiding the panel never runs `tileSetWillChange`, so nothing else would ever
+    /// close it). Ordinary fire-and-forget close, same as every non-`tileDoubleClicked` caller.
+    func closeActivePreview() {
+        close()
+    }
+
+    /// Synchronous teardown for `AppDelegate.applicationWillTerminate` (whole-branch review
+    /// finding: without this, quitting the app with a popup open — or crashing — leaves its
+    /// `tmuxer-preview-*` session on the tmux server indefinitely, since neither a detached
+    /// task nor the next-hover best-effort cleanup ever gets a chance to run). See
+    /// `PreviewClient.stopSynchronously()` for why this can't reuse the async `close()` path.
+    func tearDownActivePreviewSynchronously() {
+        cancelDwell()
+        cancelClose()
+        activePaneID = nil
+        popup?.orderOut(nil)
+        previewClient?.stopSynchronously()
         previewClient = nil
     }
 
     /// TASK-020: double-click-to-Switch, wired from every Tile's `TileHoverProxy` gesture
-    /// recognizer (`attachHoverTracking`). Runs `close()` **unconditionally, first, and
-    /// synchronously on the main actor** — before the `Task.detached` below even exists, let
-    /// alone runs — regardless of whether this pane's popup is the one currently open
-    /// (acceptance item 5: "always", not "if this Tile's own popup is open"; also needed for a
-    /// pending dwell timer on some *other* Tile, which `close()`'s own `cancelDwell()` already
-    /// covers).
+    /// recognizer (`attachHoverTracking`). Runs `closeAndDetachClient()` **unconditionally,
+    /// first, and synchronously on the main actor** — before the `Task.detached` below even
+    /// exists, let alone runs — regardless of whether this pane's popup is the one currently
+    /// open (acceptance item 5: "always", not "if this Tile's own popup is open"; also needed
+    /// for a pending dwell timer on some *other* Tile, which `closeAndDetachClient()`'s own
+    /// `cancelDwell()` already covers).
     ///
-    /// This ordering isn't cosmetic: if any popup was open when the double-click landed, its
-    /// `PreviewClient` is a real, synchronously-torn-down grouped tmux session and client
-    /// (`PreviewClientLifecycle.teardownGroupSession`, itself a blocking `kill-session`). Left
-    /// running during the resolve below, it poisons both scans this pass is about to do —
-    /// verified live during TASK-015: a hovered pane's `pane_id` appears **twice** in
-    /// `list-panes -a` while its grouped session is attached (once under the source session,
-    /// once under the group), and the group's own tty shows up in `list-clients` with no
-    /// owning app. Either would corrupt `resolveTarget`/`resolveAttachedClient` below in ways
-    /// that only show up when a popup happened to be open first — i.e. the normal case, since
-    /// double-clicking a Tile almost always follows hovering it.
+    /// The blocking half of that teardown (the returned `teardown` closure —
+    /// `PreviewClientLifecycle.teardownGroupSession`'s `kill-session` spawn, via
+    /// `PreviewClient.stop()`) is deliberately *not* run inline on the main actor, nor fired
+    /// into its own independent `Task.detached` the way `close()`'s other callers do — it's
+    /// run first, awaited, inside the same detached task as `performSwitch`, below. That
+    /// ordering isn't cosmetic (whole-branch review finding: two independently-scheduled
+    /// detached tasks race, which silently breaks it): if any popup was open when the
+    /// double-click landed, its `PreviewClient` is a real grouped tmux session and client that
+    /// must be fully torn down before `performSwitch`'s own scans run. Left running during the
+    /// resolve below, it poisons both scans this pass is about to do — verified live during
+    /// TASK-015: a hovered pane's `pane_id` appears **twice** in `list-panes -a` while its
+    /// grouped session is attached (once under the source session, once under the group), and
+    /// the group's own tty shows up in `list-clients` with no owning app. Either would corrupt
+    /// `resolveTarget`/`resolveAttachedClient` below in ways that only show up when a popup
+    /// happened to be open first — i.e. the normal case, since double-clicking a Tile almost
+    /// always follows hovering it.
     ///
-    /// Everything past `close()` is blocking I/O (`list-panes`, `list-clients`, `ps -A`, and —
-    /// on the focus-existing path — `osascript`, which blocks on the OS's own Automation
-    /// permission dialog the first time a given app is scripted) and must never run on the
-    /// main actor, or the whole UI freezes behind it. `performSwitch` is a `nonisolated static`
-    /// function taking only `Sendable` values precisely so `Task.detached` can run it without
-    /// hopping back through `self` at all.
+    /// Everything past the main-actor teardown is blocking I/O (`kill-session`, `list-panes`,
+    /// `list-clients`, `ps -A`, and — on the focus-existing path — `osascript`, which blocks on
+    /// the OS's own Automation permission dialog the first time a given app is scripted) and
+    /// must never run on the main actor, or the whole UI freezes behind it. `performSwitch` is
+    /// a `nonisolated static` function taking only `Sendable` values precisely so
+    /// `Task.detached` can run it without hopping back through `self` at all.
     fileprivate func tileDoubleClicked(paneID: String) {
-        close()
+        let teardown = closeAndDetachClient()
 
         let gateway = gateway
         let tmuxPath = tmuxPath
@@ -276,6 +328,7 @@ final class HoverPreviewController: NSResponder {
         let scriptRunner = scriptRunner
 
         Task.detached {
+            teardown()
             Self.performSwitch(
                 paneID: paneID,
                 gateway: gateway,
@@ -371,27 +424,74 @@ final class HoverPreviewController: NSResponder {
         return AttachedClient(tty: client.tty, owningApp: ttyOwnerResolver.resolveOwningApp(tty: client.tty))
     }
 
+    /// Bundle identifier `resolveOpenNewPreferredApp` checks via `NSWorkspace` before letting
+    /// `SwitchInvocation.openNewAction` default to Ghostty.
+    nonisolated private static let ghosttyBundleID = "com.mitchellh.ghostty"
+
     /// SPEC §4 path 2, "open a new terminal attached to the pane" — dispatches
-    /// `SwitchInvocation.openNewAction`'s two possible mechanisms. Best-effort: a failure here
-    /// (the fallback of the fallback) has nowhere further to go per this task's acceptance
-    /// criteria, so it's swallowed the same way `PreviewClientLifecycle`'s best-effort cleanup
-    /// steps are — SPEC §4's own priority ladder ends at "open new," with only a tooltip
-    /// fallback beyond it, which is out of this task's scope (see `SwitchAction`'s doc comment).
+    /// `SwitchInvocation.openNewAction`'s two possible mechanisms. Best-effort past this point
+    /// (the fallback of the fallback has nowhere further to go per this task's acceptance
+    /// criteria — SPEC §4's own priority ladder ends at "open new," with only a tooltip
+    /// fallback beyond it, out of scope here, see `SwitchAction`'s doc comment) but no longer
+    /// silent: whole-branch review finding — `openNewAction` hardcoded Ghostty for both `.none`
+    /// and `.ghostty`, and the old `try? process.run()` didn't even wait for `open` to exit, so
+    /// "Unable to find application named 'Ghostty'" on a machine without it was invisible and
+    /// both SPEC §4 path 2 and the Automation-denied fallback were silent no-ops. Now resolves
+    /// through an availability check first and logs whichever mechanism still fails.
     nonisolated private static func performOpenNew(
         preferredApp: SupportedTerminalApp?,
         tmuxPath: String,
         paneId: String,
         scriptRunner: any AppleScriptRunner
     ) {
-        switch SwitchInvocation.openNewAction(preferredApp: preferredApp, tmuxPath: tmuxPath, paneId: paneId) {
+        let resolvedApp = resolveOpenNewPreferredApp(preferredApp)
+        switch SwitchInvocation.openNewAction(preferredApp: resolvedApp, tmuxPath: tmuxPath, paneId: paneId) {
         case .launchProcess(let executable, let arguments):
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
-            try? process.run()
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    logOpenNewFailure("\(executable) \(arguments.joined(separator: " ")) exited \(process.terminationStatus)")
+                }
+            } catch {
+                logOpenNewFailure("\(executable) failed to launch: \(error)")
+            }
         case .runScript(let script):
-            _ = try? scriptRunner.run(script: script)
+            do {
+                _ = try scriptRunner.run(script: script)
+            } catch {
+                logOpenNewFailure("AppleScript open-new failed: \(error)")
+            }
         }
+    }
+
+    /// Ghostty is `openNewAction`'s default target for `.none`/`.ghostty` — the only one of the
+    /// three supported apps that opens via a plain process launch with zero Automation-
+    /// permission cost. That default silently no-ops on a machine without Ghostty installed
+    /// (whole-branch review finding). Falls back to Terminal.app, which ships on every Mac, in
+    /// that case. `.iTerm2`/`.terminalApp` preferences are left untouched — those are only ever
+    /// set from an app `TTYOwnerResolver` already found running, so no availability check is
+    /// needed for them.
+    nonisolated private static func resolveOpenNewPreferredApp(_ preferredApp: SupportedTerminalApp?) -> SupportedTerminalApp? {
+        switch preferredApp {
+        case .none, .ghostty:
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil {
+                return preferredApp
+            }
+            return .terminalApp(pid: -1)
+        case .iTerm2, .terminalApp:
+            return preferredApp
+        }
+    }
+
+    /// Best-effort logging for a failed open-new (whole-branch review finding: previously
+    /// swallowed with no trace at all). A full tooltip UI surfacing this to the user is out of
+    /// scope for this fix pass — this is the "log it at minimum" floor.
+    nonisolated private static func logOpenNewFailure(_ message: String) {
+        FileHandle.standardError.write(Data("tmuxer: Switch open-new failed: \(message)\n".utf8))
     }
 
     private func cancelDwell() {
