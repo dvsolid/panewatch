@@ -52,13 +52,13 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
 
     let plainShell = try #require(panes.first { $0.paneId == "%28" })
     #expect(plainShell.title == "")
-    #expect(plainShell.sessionName == "billing-advisor")
+    #expect(plainShell.sessionName == "widget-advisor")
     #expect(plainShell.command == "zsh")
     #expect(plainShell.pid == 8578)
     #expect(plainShell.tty == "/dev/ttys060")
 
     let pi = try #require(panes.first { $0.paneId == "%29" })
-    #expect(pi.title == "π - rc-billing-advisor")
+    #expect(pi.title == "π - widget-advisor")
     #expect(pi.windowIndex == 1)
     #expect(pi.paneIndex == 2)
 
@@ -67,17 +67,17 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
     #expect(claude.command == "2.1.222")
 
     let grouped = try #require(panes.first { $0.paneId == "%51" })
-    #expect(grouped.sessionName == "t2q")
+    #expect(grouped.sessionName == "wgt")
     #expect(grouped.windowIndex == 1)
     #expect(grouped.paneIndex == 2)
-    #expect(grouped.title == "✳ Investigate JIRA bug BZS-19252")
+    #expect(grouped.title == "✳ Investigate JIRA bug WGT-4821")
 }
 
 /// Acceptance item 2: each Tile's label is its raw `session:window.pane` identifier. `%51`'s
 /// `window_name` is `2.1.228` (dotted); the label must come from `windowIndex`/`paneIndex`
-/// instead (SPEC §3.4), so a correct label reads `t2q:1.2`, not something built from the
+/// instead (SPEC §3.4), so a correct label reads `wgt:1.2`, not something built from the
 /// dotted `window_name`. Confirmed against this exact pane's real `list-panes -a` (no `-F`)
-/// output: `t2q:1.2`. (Since TASK-003, `%51` also carries a Claude Code badge/task text —
+/// output: `wgt:1.2`. (Since TASK-003, `%51` also carries a Claude Code badge/task text —
 /// those are asserted in `AgentDetectorTests`, not here; this test stays scoped to the label.)
 @Test func tileLabelIsSessionWindowPaneBuiltFromIndices() throws {
     let (_, discovery) = makeDiscovery()
@@ -86,7 +86,7 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
     let tiles = try engine.reconcile()
 
     let dotted = try #require(tiles.first { $0.id == "%51" })
-    #expect(dotted.label == "t2q:1.2")
+    #expect(dotted.label == "wgt:1.2")
 }
 
 /// Acceptance item 3: tmux is invoked only via `TmuxGateway`, by resolved absolute path —
@@ -115,7 +115,7 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
 }
 
 /// Acceptance item 4: `list-panes` is spawned exactly once per discovery pass — not once per
-/// session or window. The fixture spans 4 distinct sessions and 2 windows within `qtc-auto`,
+/// session or window. The fixture spans 4 distinct sessions and 2 windows within `ops-auto`,
 /// so this would catch a regression to the `list-sessions` → `list-windows` → `list-panes`
 /// walk SPEC §2 explicitly forbids.
 @Test func scanSpawnsListPanesExactlyOnce() throws {

@@ -37,6 +37,10 @@ private final class FakeActivitySource: ActivitySource, @unchecked Sendable {
 /// controlled fixture line per pane rather than reusing `capturedPaneListFixture` — these tests
 /// need to construct specific successive-pass scenarios (a pane present in one pass and absent
 /// in the next), which a single frozen fixture can't express.
+/// `windowActivity` (epoch seconds, `#{window_activity}`) defaults to a fixed moment far in the
+/// past — tests that don't care about Activity Phase just need it present and parseable; tests
+/// that do (the restart-seeding regression test below) pass an explicit value computed from
+/// their own `now`.
 private func paneLine(
     id: String,
     session: String = "sess",
@@ -44,9 +48,10 @@ private func paneLine(
     paneIndex: Int,
     command: String = "node",
     title: String,
-    pid: Int32
+    pid: Int32,
+    windowActivity: TimeInterval = 1_700_000_000
 ) -> String {
-    "\(id)|\(session)|\(windowIndex)|main|\(paneIndex)|\(command)|\(title)|\(pid)|/dev/ttys00\(paneIndex)|/path|0||0"
+    "\(id)|\(session)|\(windowIndex)|main|\(paneIndex)|\(command)|\(title)|\(pid)|/dev/ttys00\(paneIndex)|/path|0||0|\(windowActivity)"
 }
 
 private let claudeTaskOne = paneLine(id: "%1", paneIndex: 1, title: "✳ task-one", pid: 100)
@@ -119,6 +124,36 @@ private func makeEngine(
     let secondPass = try engine.reconcile()
 
     #expect(Set(secondPass.map(\.id)) == ["%1"])
+}
+
+/// Bug repro: restarting the app wipes `ActivityStateStore`'s in-memory map, so the very first
+/// `reconcile()` after a relaunch has no `lastOutputAt` record for any pane — including one that
+/// was actively producing output seconds before the restart. An earlier fix attempt seeded a
+/// freshly-discovered pane's `lastOutputAt` to `now`, but only on reconcile passes *after* an
+/// established baseline, specifically to avoid painting every pre-existing pane green on the
+/// very first pass — which left that very first pass, i.e. every app restart, exactly as broken
+/// as before. The real fix: seed from tmux's own `#{window_activity}`
+/// (`AgentPane.windowActivityAt`) instead of `now`. That timestamp is tracked by the tmux server
+/// across this app's restarts, so `%1` (active 15s before this "restart") correctly reads
+/// `.ready` on the very first reconcile, while `%2` (idle 2 hours) correctly still reads `.idle`
+/// — the discrimination `now`-seeding on the first pass would have destroyed.
+@Test func firstReconcileAfterRestartReflectsTmuxsOwnActivityTimestamp() throws {
+    let now = Date()
+    let recentlyActiveLine = paneLine(
+        id: "%1", paneIndex: 1, title: "✳ task-one", pid: 100,
+        windowActivity: now.addingTimeInterval(-15).timeIntervalSince1970
+    )
+    let longIdleLine = paneLine(
+        id: "%2", paneIndex: 2, command: "zsh", title: "π - proj", pid: 200,
+        windowActivity: now.addingTimeInterval(-7200).timeIntervalSince1970
+    )
+    let gateway = FakeTmuxGateway(output: [recentlyActiveLine, longIdleLine].joined(separator: "\n"))
+    let engine = makeEngine(gateway: gateway)
+
+    let firstPass = try engine.reconcile(now: now)
+
+    #expect(firstPass.first { $0.id == "%1" }?.phase == .ready)
+    #expect(firstPass.first { $0.id == "%2" }?.phase == .idle)
 }
 
 /// Acceptance item 3: a pane still present and still classifying the same way across

@@ -29,6 +29,8 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
     public let type: AgentType
     public let label: String
     public let taskText: String?
+    /// Carried through from `RawPane.windowActivityAt` — see its doc comment.
+    public let windowActivityAt: Date
 
     /// `label` is built from `windowIndex`/`paneIndex`, never `windowName` — SPEC §3.4: dotted
     /// window names make `window_name` ambiguous. `taskText` is only ever non-nil for
@@ -41,6 +43,7 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
         id = pane.paneId
         self.type = type
         label = "\(pane.sessionName):\(pane.windowIndex).\(pane.paneIndex)"
+        windowActivityAt = pane.windowActivityAt
         if type == .claudeCode && matchedTitle {
             taskText = String(pane.title.dropFirst(claudeCodeTitlePrefix.count))
         } else {

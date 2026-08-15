@@ -45,6 +45,17 @@ public struct StatusBarEngine: Sendable {
     /// resulting phases deterministic without waiting on wall-clock time.
     public func reconcile(now: Date = Date()) throws -> [TileState] {
         let panes = detector.classify(try discovery.scan())
+
+        // Every discovered pane gets seeded from tmux's own `window_activity` the first time
+        // this store sees it — a no-op for a pane it already has a record for (from a prior
+        // `onOutput` or a prior seed here). Unlike seeding from `now`, this is correct on the
+        // very first `reconcile()` too: `window_activity` is tracked by the tmux server across
+        // this app's whole lifetime, not reset by an app relaunch, so a pane that was active 10s
+        // ago still reads as active immediately after a restart instead of a cold `.idle`.
+        for pane in panes {
+            activityStateStore.seedIfAbsent(paneId: pane.id, at: pane.windowActivityAt)
+        }
+
         topology.replace(with: panes)
         activitySource.setWatchedPanes(Set(panes.map(\.id)))
         return tiles(now: now)

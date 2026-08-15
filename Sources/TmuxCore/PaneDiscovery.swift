@@ -1,6 +1,8 @@
+import Foundation
+
 /// One tmux pane, as reported by `list-panes -a`, with no agent classification applied yet.
 ///
-/// Deliberately does not carry `windowName`: SPEC §3.4 — dotted window names (`t2q:2.1.228`)
+/// Deliberately does not carry `windowName`: SPEC §3.4 — dotted window names (`wgt:2.1.228`)
 /// make `window_name` ambiguous as a target/label component, so display and click-targets are
 /// always built from `windowIndex`/`paneIndex` instead. See feature spec § Architecture.
 public struct RawPane: Equatable, Sendable {
@@ -12,6 +14,11 @@ public struct RawPane: Equatable, Sendable {
     public let command: String
     public let pid: Int32
     public let tty: String
+    /// tmux's own last-output timestamp for this pane's window (`#{window_activity}`),
+    /// independent of this app's own process lifetime — the anchor `StatusBarEngine` seeds a
+    /// pane's Activity Phase from the moment it's first discovered, including on the very first
+    /// discovery pass after an app relaunch (see `ActivityStateStore.seedIfAbsent`).
+    public let windowActivityAt: Date
 }
 
 public enum PaneDiscoveryError: Error, Equatable {
@@ -31,11 +38,12 @@ public struct PaneDiscovery: Sendable {
         try Self.parse(gateway.listPanes())
     }
 
-    /// Parses `ProcessTmuxGateway.paneFormat`-shaped output: 13 `|`-delimited fields per
+    /// Parses `ProcessTmuxGateway.paneFormat`-shaped output: 14 `|`-delimited fields per
     /// line, matching `#{pane_id}|#{session_name}|#{window_index}|#{window_name}|
     /// #{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|
-    /// #{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}`. Only the
-    /// 8 fields `RawPane` declares are kept; the rest are reserved for later tasks.
+    /// #{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|
+    /// #{window_activity}`. Only the 9 fields `RawPane` declares are kept; the rest are
+    /// reserved for later tasks.
     ///
     /// `omittingEmptySubsequences: false` on the field split matters: `pane_title` is
     /// routinely empty (untitled panes), and dropping empty subsequences would silently
@@ -43,10 +51,11 @@ public struct PaneDiscovery: Sendable {
     static func parse(_ output: String) throws -> [RawPane] {
         try output.split(separator: "\n", omittingEmptySubsequences: true).map { line in
             let fields = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-            guard fields.count == 13,
+            guard fields.count == 14,
                   let windowIndex = Int(fields[2]),
                   let paneIndex = Int(fields[4]),
-                  let pid = Int32(fields[7])
+                  let pid = Int32(fields[7]),
+                  let windowActivityEpoch = TimeInterval(fields[13])
             else {
                 throw PaneDiscoveryError.malformedLine(String(line))
             }
@@ -58,7 +67,8 @@ public struct PaneDiscovery: Sendable {
                 title: fields[6],
                 command: fields[5],
                 pid: pid,
-                tty: fields[8]
+                tty: fields[8],
+                windowActivityAt: Date(timeIntervalSince1970: windowActivityEpoch)
             )
         }
     }

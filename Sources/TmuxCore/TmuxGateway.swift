@@ -19,11 +19,13 @@ public protocol TmuxGateway: Sendable {
 /// path, never a bare `tmux` (SPEC §6 — the user's interactive `tmux` is a zsh plugin alias
 /// that fails to resolve non-interactively).
 public struct ProcessTmuxGateway: TmuxGateway {
-    /// Full field list from feature spec §2. Includes columns `PaneDiscovery` doesn't parse
-    /// yet (`window_name`, `pane_current_path`, `session_grouped`, `session_group`,
-    /// `alternate_on`) so later tasks (session-group dedup, alternate-screen handling) don't
-    /// need to touch this format string again.
-    static let paneFormat = "#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}"
+    /// Full field list from feature spec §2, plus `window_activity` (epoch seconds of the
+    /// window's last output — tracked by the tmux server itself, independent of this app's own
+    /// process lifetime). Includes columns `PaneDiscovery` doesn't parse yet (`window_name`,
+    /// `pane_current_path`, `session_grouped`, `session_group`, `alternate_on`) so later tasks
+    /// (session-group dedup, alternate-screen handling) don't need to touch this format string
+    /// again.
+    static let paneFormat = "#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|#{window_activity}"
 
     public let tmuxPath: String
 

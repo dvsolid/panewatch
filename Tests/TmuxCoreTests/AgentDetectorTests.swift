@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import TmuxCore
 
-/// The hostname baked into the captured fixture's `LMYG2LW3F` rows (SPEC §2's negative
+/// The hostname baked into the captured fixture's `HOSTX7K2Q9` rows (SPEC §2's negative
 /// signal). Passed explicitly to `AgentDetector` rather than relying on the real
 /// `ProcessInfo.processInfo.hostName` — tests must not depend on the machine they run on.
-private let fixtureHostname = "LMYG2LW3F"
+private let fixtureHostname = "HOSTX7K2Q9"
 
 /// Records every `pid` it's asked about (per batch call) and returns canned argv for it —
 /// TASK-004's Test seam: "descendant-process data is injected via a fake (no real process tree
@@ -54,8 +54,8 @@ private final class FakeDescendantProcessInspector: DescendantProcessInspector, 
 /// SPEC §2.1: `session_group_size=1` on the reference machine today (the duplication is
 /// latent, not currently reproducing) — no captured row exists for two *different* session
 /// names sharing a pane. This row puts the fixture's `%51` (Claude Code) under a second
-/// session name `t2q-2` in the same group `t2q`, matching SPEC's "design for it now" guidance.
-private let groupDuplicatePaneRow = "%51|t2q-2|1|2.1.228|2|2.1.222|✳ Investigate JIRA bug BZS-19252|54430|/dev/ttys051|/Users/dmitryv/Work/Projects/billing/text2quote|1|t2q|0"
+/// session name `wgt-2` in the same group `wgt`, matching SPEC's "design for it now" guidance.
+private let groupDuplicatePaneRow = "%51|wgt-2|1|2.1.228|2|2.1.222|✳ Investigate JIRA bug WGT-4821|54430|/dev/ttys051|/Users/user/Projects/acme/quotegen|1|wgt|0|1700000000"
 
 /// Synthetic row for acceptance item 6: a pane matching neither a title pattern (not π, not
 /// `✳ `) nor a negative signal (title non-empty, not the hostname, not `:path`;
@@ -64,7 +64,7 @@ private let groupDuplicatePaneRow = "%51|t2q-2|1|2.1.228|2|2.1.222|✳ Investiga
 /// land on one side or the other. Distinct from the hostname-title case (item 4): this checks
 /// that an unrecognized-but-plausible-looking title doesn't sneak through as an "unknown"
 /// Tile, and that `pane_current_command` never drives a positive ID on its own (SPEC §2).
-private let ambiguousPaneRow = "%99|qtc-auto|1|main|4|node|dev-server|9001|/dev/ttys099|/Users/dmitryv/Work/Projects/billing/qtc-ops-automation|0||0"
+private let ambiguousPaneRow = "%99|ops-auto|1|main|4|node|dev-server|9001|/dev/ttys099|/Users/user/Projects/acme/ops-automation|0||0|1700000000"
 
 /// Default descendant inspector for tests that aren't exercising the fallback or TASK-013
 /// corroboration directly. Every ladder-step-2-eligible pid (not seeded below) resolves to "no
@@ -90,7 +90,7 @@ private func classify(
 @Suite struct AgentDetectorTests {
     /// Acceptance items 1 + 4: plain shell (`%28`, `%45`), ngrok (`%5`), and hostname-titled
     /// (`%11`, `%5`) panes never produce an `AgentPane`. `%28`/`%45` have empty titles; `%11`
-    /// and `%5` both carry the hostname `LMYG2LW3F` as their title — tmux's default when
+    /// and `%5` both carry the hostname `HOSTX7K2Q9` as their title — tmux's default when
     /// nothing branded the pane (SPEC §2's negative signal).
     @Test func plainShellSshNgrokAndHostnameTitledPanesAreExcluded() throws {
         let panes = try classify(capturedPaneListFixture)
@@ -110,7 +110,7 @@ private func classify(
         let pi = try #require(panes.first { $0.id == "%29" })
         #expect(pi.type == .pi)
         #expect(pi.type.badge == .text("π"))
-        #expect(pi.label == "billing-advisor:1.2")
+        #expect(pi.label == "widget-advisor:1.2")
     }
 
     /// Acceptance item 3: a Claude Code pane (title starting `✳ `) appears with the Claude
@@ -138,7 +138,7 @@ private func classify(
         #expect(AgentType.pi.badge == .text("π"))
     }
 
-    /// Acceptance item 5: two sessions in the same session group (`t2q`/`t2q-2`) that share a
+    /// Acceptance item 5: two sessions in the same session group (`wgt`/`wgt-2`) that share a
     /// window produce exactly one Tile for the shared pane (`%51`), not two, deduped on
     /// `pane_id` per SPEC §2.1 — never on `session:window.pane`, which would see two distinct
     /// identifiers here and render a duplicate.
@@ -151,14 +151,14 @@ private func classify(
     }
 
     /// The group-dedup winner is deterministic (SPEC §2.1's "break ties alphabetically for
-    /// stability") rather than depending on input order: `t2q` sorts before `t2q-2`, so the
-    /// surviving row's label is built from `t2q`, not `t2q-2`, regardless of which row the
+    /// stability") rather than depending on input order: `wgt` sorts before `wgt-2`, so the
+    /// surviving row's label is built from `wgt`, not `wgt-2`, regardless of which row the
     /// duplicate `list-panes` output happened to list first.
     @Test func groupDedupTieBreaksAlphabeticallyOnSessionName() throws {
         let panes = try classify(capturedPaneListFixture + "\n" + groupDuplicatePaneRow)
 
         let survivor = try #require(panes.first { $0.id == "%51" })
-        #expect(survivor.label == "t2q:1.2")
+        #expect(survivor.label == "wgt:1.2")
     }
 
     /// Acceptance item 6: a pane whose title matches neither a title pattern nor a hostname
@@ -256,7 +256,7 @@ private func classify(
 
     // MARK: - TASK-013: corroborate title-matched panes against a live descendant process
 
-    /// Acceptance item 1: `%29` (title `π - rc-billing-advisor`, pid 25236) is a title match,
+    /// Acceptance item 1: `%29` (title `π - widget-advisor`, pid 25236) is a title match,
     /// but its only descendant here is a plain shell tool — no live `pi`/`claude` process.
     /// tmux's sticky `pane_title` (this task's motivating bug) means the title alone is no
     /// longer trustworthy, so the pane must be excluded, not classified.

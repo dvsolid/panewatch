@@ -37,9 +37,9 @@ Existing solutions (top, tmux list-panes, tmux capture-pane) are CLI-only and re
     identical to one idle for an hour; if that distinction turns out to matter in practice,
     reintroducing a very slow opacity fade *after* `fadeWindow` is the natural extension —
     not attempted here since nothing has demonstrated the need yet.
-  - **Label** — session name or project name (e.g., "qtc-auto", "t2q", "squid")
+  - **Label** — session name or project name (e.g., "ops-auto", "wgt", "squid")
   - **Agent type badge** — π (Pi), 🟣 (Claude Code), 🤖 (Codex), or auto-detected
-  - **Optional task indicator** — if Claude Code has a visible prompt task (e.g., "✳ BZS-19252")
+  - **Optional task indicator** — if Claude Code has a visible prompt task (e.g., "✳ WGT-4821")
 
 **Timing (single source of truth — do not restate these elsewhere):**
 
@@ -75,13 +75,13 @@ exact there, so the phase boundaries are exact too.
 This is the reverse of the intuitive ordering, and it is what the live data shows. Observed on the reference machine:
 
 ```
-%29  cmd=zsh      title=π - rc-billing-advisor        ← Pi, but cmd is zsh
-%14  cmd=zsh      title=π - rc-cli                    ← Pi, but cmd is zsh
-%54  cmd=node     title=π - qtc-ops-automation        ← Pi, cmd is node
-%58  cmd=node     title=π - squid-ai-test             ← Pi, cmd is node
+%29  cmd=zsh      title=π - widget-advisor        ← Pi, but cmd is zsh
+%14  cmd=zsh      title=π - sample-cli                    ← Pi, but cmd is zsh
+%54  cmd=node     title=π - ops-automation        ← Pi, cmd is node
+%58  cmd=node     title=π - sample-ai-test             ← Pi, cmd is node
 %9   cmd=2.1.222  title=✳ task-execution-workflow     ← Claude Code
 %24  cmd=2.1.226  title=✳ Continue the loop           ← Claude Code, different version
-%1   cmd=Python   title=LMYG2LW3F                     ← not an agent
+%1   cmd=Python   title=HOSTX7K2Q9                     ← not an agent
 ```
 
 Any rule keyed on `cmd=node` misses most real Pi panes. **What distinguishes the `zsh` cases from the `node` cases is not established** — plausibly how Pi was launched (direct exec vs. wrapper script vs. resumed job), but this was not tested. `%54` and `%58` run the same agent as `%29` and `%14` yet report `node`, so the field is inconsistent even within one agent type. Treat the *observation* as reliable and the *cause* as unknown; that alone is sufficient reason not to depend on the field.
@@ -101,14 +101,17 @@ If the descendant-process walk itself fails to run this pass (e.g. the `ps` snap
 **Do not match Claude Code on `pane_current_command` matching `2.1.XXX`.** That string is the versioned binary name and changes on every Claude Code release; a rule built on it ships a patch per upstream update. Use it to *confirm* a title match, never to drive one.
 
 **Negative signals (cheap exclusions, apply before the ladder):**
-- `pane_title` equal to the machine hostname (e.g. `LMYG2LW3F`) — this is tmux's default when nothing has set a title, so it positively indicates "no agent branded this pane."
+- `pane_title` equal to the machine hostname (e.g. `HOSTX7K2Q9`) — this is tmux's default when nothing has set a title, so it positively indicates "no agent branded this pane."
 - `pane_title` equal to `:<path>` or empty — same reasoning.
 - `pane_current_command` in {`ngrok`, `ssh`, `zsh`, `bash`, `fish`} *and* no title match *and* no agent descendant.
 
 **Discovery method:**
 - One `tmux list-panes -a -F '<format>'` call gets the entire topology in a single subprocess spawn. Do **not** walk `list-sessions` → `list-windows` → `list-panes`; that is O(sessions × windows) spawns for the same data.
 - Format string should include at minimum:
-  `#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}`
+  `#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|#{window_activity}`
+- `window_activity` (epoch seconds of the window's last output) seeds a pane's `lastOutputAt` the
+  first time `ActivityStateStore` sees it (§1) — tracked by the tmux server itself, so it survives
+  this app's own restarts, unlike a value derived from `Date()` at discovery time.
 - Re-scan every `discoveryInterval` (30s) and reconcile against cached state by `pane_id`.
 - Descendant-process inspection (ladder step 2) is the only expensive step. This caching applies only to its use as the ladder step 3 *fallback* (a title-less or excluded pane, resolved once and memoized): run it once per newly-seen `pane_id` and cache the result for the pane's lifetime. Its use as ladder step 1's *corroboration* check is deliberately **not** cached — a title match is re-walked every discovery pass, since the question there ("is the agent that set this title still alive") can change pass to pass even though the pane's identity doesn't. Both uses still batch into the same single `ps -A` spawn per discovery pass (one process-table snapshot serves every pid needing a walk that pass, regardless of which ladder step asked).
 
@@ -117,12 +120,12 @@ If the descendant-process walk itself fails to run this pass (e.g. the `ps` snap
 `tmux list-sessions` on the reference machine reports:
 
 ```
-t2q  grouped=1  group=t2q  size=1  attached=1
+wgt  grouped=1  group=wgt  size=1  attached=1
 ```
 
 Sessions in a **group share their windows**. When a group has more than one member, the same pane is reachable under every member's session name, and a bar keyed on `session:window.pane` renders duplicate tiles for one agent.
 
-**Status:** the group itself is confirmed present (`t2q`), but `session_group_size=1` today — so the duplication is **latent, not currently reproducing**. It appears the moment a second session joins the group (`tmux new-session -t t2q`), which is a normal thing to do when attaching the same work from a second terminal. Design for it now; it is cheap to key on `pane_id` from the start and expensive to retrofit once session names are threaded through the model.
+**Status:** the group itself is confirmed present (`wgt`), but `session_group_size=1` today — so the duplication is **latent, not currently reproducing**. It appears the moment a second session joins the group (`tmux new-session -t wgt`), which is a normal thing to do when attaching the same work from a second terminal. Design for it now; it is cheap to key on `pane_id` from the start and expensive to retrofit once session names are threaded through the model.
 
 **Rule: `pane_id` (`%51`) is the identity of an agent. Everything else is display data.**
 
@@ -250,7 +253,7 @@ The actual mechanism is the **alternate screen**. Pane `%24` reports `alternate_
 
 - **Ghostty vs iTerm**: both use standard tmux panes; clients differ by TTY. No impact on detection.
 - **Nested tmux**: an inner tmux server is invisible to the outer one — its panes appear as a single pane running `tmux`. Detect `pane_current_command == "tmux"` and either skip the pane or (Phase 4) connect to the inner server's socket separately. Do not attempt to infer inner panes from captured content.
-- **Dotted window names**: `t2q:2.1.228` — tmux parses `.` as the window/pane separator, so this target string is ambiguous. **Always build targets from `#{window_index}` and `#{pane_index}`, never from `window_name`.** `t2q:1.2` is unambiguous; `t2q:2.1.228` is not. Since §2.1 already establishes `pane_id` as identity, the cleanest form is to target `%51` directly wherever tmux accepts a pane id.
+- **Dotted window names**: `wgt:2.1.228` — tmux parses `.` as the window/pane separator, so this target string is ambiguous. **Always build targets from `#{window_index}` and `#{pane_index}`, never from `window_name`.** `wgt:1.2` is unambiguous; `wgt:2.1.228` is not. Since §2.1 already establishes `pane_id` as identity, the cleanest form is to target `%51` directly wherever tmux accepts a pane id.
 
 ### 4. Click Behavior
 
@@ -312,11 +315,11 @@ struct AgentPane: Identifiable, Hashable {
 
     // --- Display / targeting data. Renumbers as panes and windows close;
     // --- re-read on every discovery pass. Never use as a key.
-    var sessionName: String          // e.g. "t2q" (chosen name if grouped)
+    var sessionName: String          // e.g. "wgt" (chosen name if grouped)
     var windowIndex: Int             // e.g. 1  — build targets from this, not windowName
     var windowName: String           // e.g. "2.1.228" — display only; contains dots
     var paneIndex: Int               // e.g. 2
-    var paneTitle: String            // e.g. "✳ Investigate JIRA bug BZS-19252"
+    var paneTitle: String            // e.g. "✳ Investigate JIRA bug WGT-4821"
     var currentPath: String          // for deriving a project label
     var panePID: pid_t               // root of the descendant walk in §2
 
@@ -367,23 +370,23 @@ Findings below marked **[verified]** were reproduced against a live tmux 3.6a se
 
 ### tmux structure
 ```
-tmux session (e.g., "qtc-auto", "t2q")     ← may belong to a GROUP; grouped sessions share windows
+tmux session (e.g., "ops-auto", "wgt")     ← may belong to a GROUP; grouped sessions share windows
   └── tmux window (e.g., "main", "2.1.228", "node")
        └── tmux pane (e.g., %10, %51, %55) ← the only stable identity
 ```
 
 ### Key challenges encountered
 
-1. **Dotted window names** — `t2q:2.1.228` is ambiguous because tmux parses `.` as the window/pane separator. Build targets from `window_index`/`pane_index`, or address `pane_id` directly. **[verified]**
+1. **Dotted window names** — `wgt:2.1.228` is ambiguous because tmux parses `.` as the window/pane separator. Build targets from `window_index`/`pane_index`, or address `pane_id` directly. **[verified]**
 2. **Alternate screen, not vi mode** — the earlier "empty `capture-pane` during vi mode" diagnosis was wrong. All three Claude Code panes captured full content at `pane_in_mode=0`. The real variable is `alternate_on`: under an alt screen, `-S -N` reads the *normal* screen's stale scrollback. Capture with `-p -J` and no `-S`. See §3.3. **[verified]**
-3. **Session groups** — `t2q` reports `grouped=1 group=t2q`; grouped sessions share windows, so one pane appears under several session names and naively-keyed tiles duplicate. Dedupe on `pane_id`. See §2.1. **[group verified; duplication latent — `session_group_size=1` today]**
+3. **Session groups** — `wgt` reports `grouped=1 group=wgt`; grouped sessions share windows, so one pane appears under several session names and naively-keyed tiles duplicate. Dedupe on `pane_id`. See §2.1. **[group verified; duplication latent — `session_group_size=1` today]**
 4. **Pi often reports `cmd=zsh`** — 2 of 3 Pi panes have `pane_current_command=zsh`, not `node`. Title is the strong signal. See §2. **[verified]**
 5. **Claude Code's `pane_current_command` is a version string** — observed as `2.1.222`, `2.1.226`, `2.1.228` simultaneously across panes. Unusable as a stable matcher. **[verified]**
 6. **Control mode streams `%output` per pane, scoped to the attached session** — the basis for §3.2. Requires stdin held open or the client exits immediately with `%exit`. **[verified]**
 7. **A control client does not resize the session** under `window-size=latest` (the server default here); pass `-f ignore-size` anyway so `window-size=smallest` configurations are safe. **[verified for `latest`; assumed for `smallest`]**
 8. **`tmux attach -t 'session:window.pane'` accepts a pane target** and selects it (`%window-pane-changed @25 %68`). But use `select-window`/`select-pane` to focus an *existing* client — `attach` adds a second one. See §4. **[verified]**
 9. **`tmux` is not on a fixed path** — only `/opt/homebrew/bin/tmux` exists here, and the user's interactive `tmux` is a zsh plugin alias that fails to resolve non-interactively. Resolve explicitly; never shell out to a bare `tmux`. **[verified]**
-10. **Nested tmux** — user runs tmux inside tmux (qtc-auto → t2q); the inner server's panes are invisible to the outer one. See §3.4. **[assumed]**
+10. **Nested tmux** — user runs tmux inside tmux (ops-auto → wgt); the inner server's panes are invisible to the outer one. See §3.4. **[assumed]**
 11. **Terminal detection** — Ghostty and iTerm both support tmux attach; clients differ by TTY. **[assumed]**
 12. **Ghostty launch** — `open -a Ghostty --args -e tmux attach -t "session:window"`, or osascript `do script`. **[assumed]**
 13. **iTerm launch** — osascript to create a window and write the command. **[assumed]**
@@ -406,8 +409,8 @@ tmux attach -t '<session>:<window_index>.<pane_index>'   # NEW client only
 
 ### Agent detection patterns
 - **Pi:** title starts with `π ` (usually `π - <project>`); `pane_current_command` is `zsh` *or* `node` — do not rely on it. Prompt line shows `ctx 47.6k (37%)` when idle.
-- **Claude Code:** title starts with `✳ ` (e.g. `✳ Investigate JIRA bug BZS-19252`); `pane_current_command` is the release version (`2.1.228`) — corroborating only. Status line shows `ctx 111.5k (11%)`, model name, and `⏵⏵ auto mode on`.
-- **Not an agent:** `pane_title` equal to the hostname (`LMYG2LW3F`) — tmux's default when nothing set a title.
+- **Claude Code:** title starts with `✳ ` (e.g. `✳ Investigate JIRA bug WGT-4821`); `pane_current_command` is the release version (`2.1.228`) — corroborating only. Status line shows `ctx 111.5k (11%)`, model name, and `⏵⏵ auto mode on`.
+- **Not an agent:** `pane_title` equal to the hostname (`HOSTX7K2Q9`) — tmux's default when nothing set a title.
 
 ## Phases
 
