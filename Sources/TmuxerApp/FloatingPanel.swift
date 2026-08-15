@@ -44,6 +44,12 @@ final class FloatingPanel: NSPanel {
     /// Panel corner radius (TASK-007) — applied to the backing `NSVisualEffectView`'s layer
     /// since the window itself is `.borderless` and has no native chrome to round.
     private static let cornerRadius: CGFloat = 14
+    /// Static branding header geometry — see its construction in `init` for why it's a
+    /// fixed-height row rather than an adaptive one (no live data to size around).
+    private static let headerHeight: CGFloat = 36
+    private static let headerPadding: CGFloat = 10
+    private static let headerIconSize: CGFloat = 14
+    private static let headerIconLabelSpacing: CGFloat = 6
 
     init() {
         super.init(
@@ -85,7 +91,68 @@ final class FloatingPanel: NSPanel {
         material.layer?.masksToBounds = true
         content.addSubview(material)
 
-        scrollView.frame = content.bounds
+        // Static branding header — purely decorative, no live data, never updates after
+        // init. Echoes the Menu Bar Icon's own `rectangle.stack` glyph so the panel reads
+        // as the same product at a glance. Sits on top of `material` (no background of
+        // its own), pinned to the content's top edge via `.minYMargin` so it stays put
+        // if the panel is ever resized (e.g. a screen change while hidden).
+        let header = NSView(frame: NSRect(x: 0, y: content.bounds.height - Self.headerHeight, width: content.bounds.width, height: Self.headerHeight))
+        header.autoresizingMask = [.width, .minYMargin]
+        content.addSubview(header)
+
+        // Vivid cool-toned wash under the header content — indigo -> violet, high enough
+        // alpha to read as a deliberate colored band (not a translucent hint like
+        // `TileCardView.tintLayer`'s phase tint). Clipped to the panel's own top corners
+        // so it never shows square corners poking out above `material`'s rounded rect.
+        let headerTint = NSView(frame: header.bounds)
+        headerTint.autoresizingMask = [.width, .height]
+        headerTint.wantsLayer = true
+        let gradient = CAGradientLayer()
+        gradient.frame = header.bounds
+        // "Slate" — chosen from a set of green/blue/grey candidates previewed for the
+        // user (2026-08-14); rejects the earlier indigo/violet gradient outright.
+        gradient.colors = [
+            NSColor(red: 0.322, green: 0.361, blue: 0.431, alpha: 0.95).cgColor,
+            NSColor(red: 0.200, green: 0.227, blue: 0.282, alpha: 0.90).cgColor
+        ]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        headerTint.layer?.addSublayer(gradient)
+        headerTint.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        headerTint.layer?.cornerRadius = Self.cornerRadius
+        headerTint.layer?.masksToBounds = true
+        header.addSubview(headerTint)
+
+        let headerIcon = NSImageView(frame: NSRect(x: Self.headerPadding, y: (Self.headerHeight - Self.headerIconSize) / 2, width: Self.headerIconSize, height: Self.headerIconSize))
+        headerIcon.autoresizingMask = [.maxXMargin]
+        let iconImage = NSImage(systemSymbolName: "rectangle.stack.fill", accessibilityDescription: nil)
+        iconImage?.isTemplate = true
+        headerIcon.image = iconImage
+        headerIcon.contentTintColor = .white
+        header.addSubview(headerIcon)
+
+        let headerLabel = NSTextField(labelWithString: "MY AGENTS")
+        headerLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        headerLabel.textColor = .white
+        let labelHeight = headerLabel.intrinsicContentSize.height
+        headerLabel.frame = NSRect(
+            x: Self.headerPadding + Self.headerIconSize + Self.headerIconLabelSpacing,
+            y: (Self.headerHeight - labelHeight) / 2,
+            width: content.bounds.width - Self.headerPadding * 2 - Self.headerIconSize - Self.headerIconLabelSpacing,
+            height: labelHeight
+        )
+        headerLabel.autoresizingMask = [.width]
+        header.addSubview(headerLabel)
+
+        // Hairline divider separating the header from the scrollable Tile list below it
+        // — same 12%-white treatment `TileCardView`'s own card border already uses.
+        let divider = NSView(frame: NSRect(x: 0, y: 0, width: content.bounds.width, height: 1))
+        divider.autoresizingMask = [.width]
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        header.addSubview(divider)
+
+        scrollView.frame = NSRect(x: 0, y: 0, width: content.bounds.width, height: content.bounds.height - Self.headerHeight)
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
@@ -135,7 +202,11 @@ final class FloatingPanel: NSPanel {
         // doc comment). Clamping the card to what's left, rather than assuming the ideal 100pt
         // always fits, is what keeps the Activity Phase dot (centered on the header row via
         // `dotCenter`) from being clipped by the clip view under legacy scrollers.
-        let horizontalMargin: CGFloat = 4
+        // Widened 4 -> 8pt on direct user feedback (2026-08-14, comparing against the
+        // header-color-picker mockup's proportions), paired with `frame(on:)`'s matching
+        // width bump so the ideal 120pt card width is unaffected — only the frame's own
+        // breathing room around it grows.
+        let horizontalMargin: CGFloat = 8
         let cardWidth = min(idealCardSize.width, max(width - horizontalMargin * 2, 0))
         let spacing: CGFloat = 6
         let contentHeight = max(
@@ -178,9 +249,13 @@ final class FloatingPanel: NSPanel {
         // its old 84pt ceiling (92pt was exactly `84 + 2*4`, the max the old card width could
         // reach under `render(_:)`'s overlay-scroller margin — there was no slack left to widen
         // the card without widening the panel too). Widened again 110 -> 130pt on direct user
-        // feedback, same reasoning. Still respects the legacy-scroller clamp: see
-        // `TileCardView.cardSize`'s doc comment for the 130 -> 107pt-under-`.legacy` math.
-        let width: CGFloat = 130
+        // feedback, same reasoning. Widened again 130 -> 138pt (2026-08-14) purely to match
+        // `render(_:)`'s `horizontalMargin` bump (4 -> 8pt) one-for-one — this leaves
+        // `TileCardView.cardSize.width` (120pt, unchanged) exactly as much room as before;
+        // only the frame's own breathing room around the Tiles grows. Still respects the
+        // legacy-scroller clamp: see `TileCardView.cardSize`'s doc comment for the
+        // 130 -> 107pt-under-`.legacy` math (unaffected by this change, same margin delta).
+        let width: CGFloat = 138
         guard let visible = screen?.visibleFrame else {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
