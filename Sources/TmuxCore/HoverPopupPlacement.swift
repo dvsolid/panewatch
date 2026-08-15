@@ -6,8 +6,10 @@ import CoreGraphics
 /// gives for keeping `TmuxCore` AppKit-free (CLAUDE.md). `CGRect`/`CGSize` are CoreGraphics, not
 /// AppKit, so this needs no `import AppKit` and no new `Package.swift` dependency.
 public enum HoverPopupPlacement {
-    /// Feature spec's fixed popup size (TASK-014 acceptance item 4) — not resizable.
-    public static let size = CGSize(width: 420, height: 260)
+    /// Feature spec's fixed popup size (TASK-014 acceptance item 4) — not resizable. Bumped
+    /// from the original 420x260 so a smaller terminal font (`PreviewClient.terminalView.font`)
+    /// actually buys more visible rows/cols instead of just more padding.
+    public static let size = CGSize(width: 640, height: 420)
 
     /// Gap between a Tile's edge and the popup. Kept small on purpose: `HoverPreviewController`
     /// cancels its close-grace timer on entering either the Tile or the popup, and a small gap

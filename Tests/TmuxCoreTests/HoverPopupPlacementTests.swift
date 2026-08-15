@@ -15,9 +15,9 @@ import Testing
 
     /// Feature spec's fixed popup size (TASK-014 acceptance item 4) — none of the other tests
     /// below check the returned rect's dimensions, only its position, so this is the only test
-    /// that would catch a regression to the literal 420x260 size.
-    @Test func sizeIsTheFeatureSpecsFixed420By260() {
-        #expect(HoverPopupPlacement.size == CGSize(width: 420, height: 260))
+    /// that would catch a regression to the literal 640x420 size.
+    @Test func sizeIsTheFeatureSpecsFixed640By420() {
+        #expect(HoverPopupPlacement.size == CGSize(width: 640, height: 420))
 
         let tile = CGRect(x: 1400, y: 400, width: 120, height: 64)
         let popup = HoverPopupPlacement.frame(forTile: tile, within: screen)

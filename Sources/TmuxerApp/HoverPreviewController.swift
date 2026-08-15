@@ -584,7 +584,7 @@ private final class TileHoverProxy: NSResponder {
 }
 
 /// The Hover Preview Popup window itself — a small non-activating panel, sized per the feature
-/// spec's fixed ~420x260pt (TASK-014 acceptance item 4, not resizable: `.borderless` with no
+/// spec's fixed ~640x420pt (TASK-014 acceptance item 4, not resizable: `.borderless` with no
 /// `.resizable` style bit, and nothing in `HoverPreviewController` ever changes its size). Body
 /// is either a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
 /// unavailable" state (`showUnavailable()`, acceptance item 5) — `HoverPreviewController` swaps

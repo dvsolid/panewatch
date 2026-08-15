@@ -69,6 +69,9 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         // 2031/7727) — harmless, but floods the log on every hover once real pane output with
         // those sequences arrives.
         terminalView.terminal.silentLog = true
+        // Smaller than SwiftTerm's default (the system font size, ~13pt) so the popup's fixed
+        // frame (`HoverPopupPlacement.size`) fits more rows/cols of real pane content.
+        terminalView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         // Same bug class TASK-014's review caught on `NSTrackingArea.owner` (also `weak`):
         // without this wiring surviving past init, `processTerminated` would never reach a
         // live delegate and acceptance items 4/5 would be silently dead despite a green build.
