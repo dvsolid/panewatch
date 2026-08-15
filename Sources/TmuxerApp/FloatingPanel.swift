@@ -177,9 +177,10 @@ final class FloatingPanel: NSPanel {
         // TASK-012: widened again 92 -> 110pt so `TileCardView.cardSize.width` could grow past
         // its old 84pt ceiling (92pt was exactly `84 + 2*4`, the max the old card width could
         // reach under `render(_:)`'s overlay-scroller margin — there was no slack left to widen
-        // the card without widening the panel too). Still respects the legacy-scroller clamp:
-        // see `TileCardView.cardSize`'s doc comment for the 110 -> 87pt-under-`.legacy` math.
-        let width: CGFloat = 110
+        // the card without widening the panel too). Widened again 110 -> 130pt on direct user
+        // feedback, same reasoning. Still respects the legacy-scroller clamp: see
+        // `TileCardView.cardSize`'s doc comment for the 130 -> 107pt-under-`.legacy` math.
+        let width: CGFloat = 130
         guard let visible = screen?.visibleFrame else {
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }

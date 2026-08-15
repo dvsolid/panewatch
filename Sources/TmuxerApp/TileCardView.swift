@@ -19,27 +19,28 @@ import TmuxCore
 /// phase keeps a steady dot at `dotSteadySize`, unaffected by `blinkOn`.
 ///
 /// TASK-012: visual polish — the dot centers on the same line the badge/name header row centers
-/// on (`headerRowCenterY`), the card is wider (`cardSize.width` 84 -> 100), and the card's
-/// `tintLayer` now carries a subtle, static `tile.phase.color` tint alongside its existing
-/// hairline/glass chrome.
+/// on (`headerRowCenterY`), the card is wider (`cardSize.width` 84 -> 100, later 100 -> 120), and
+/// the card's `tintLayer` now carries a subtle, static `tile.phase.color` tint alongside its
+/// existing hairline/glass chrome.
 @MainActor
 final class TileCardView {
     /// Ideal size per the feature spec's chosen visual direction. `FloatingPanel` clamps the
     /// *width* actually passed to `init(width:)` down to whatever the scroll view's clip area
     /// has available — under legacy (non-overlay) scrollers that's narrower than this ideal,
     /// since the vertical scroller thickness eats into `contentSize.width` (see `FloatingPanel`
-    /// review notes: 110pt panel -> 95pt clip under `.legacy`, not 110pt, minus the 8pt margin
-    /// `render(_:)` reserves -> 87pt card, still wider than the pre-TASK-012 84pt ideal). Height
+    /// review notes: 130pt panel -> 115pt clip under `.legacy`, not 130pt, minus the 8pt margin
+    /// `render(_:)` reserves -> 107pt card, still wider than the pre-widening 100pt ideal). Height
     /// is never adaptive; only width is.
     ///
-    /// TASK-012 (acceptance item 3): widened 84 -> 100pt so task text truncates less
-    /// aggressively, in step with `FloatingPanel`'s panel width widening 92 -> 110pt (the two
-    /// move together: 84 was already `92 - 2*4` — the exact max that fit under the old panel
-    /// width's overlay-scroller clamp margin — so widening the card past 84 required widening
-    /// its container too). This supersedes the specific 92pt figure from TASK-007's acceptance
-    /// criteria; TASK-007's own acceptance ("panel 92pt wide") was itself only ever an input
-    /// sized to fit TASK-008's original 84pt card, not an independent constraint.
-    static let cardSize = NSSize(width: 100, height: 64)
+    /// Widened 84 -> 100pt (TASK-012, acceptance item 3) so task text truncates less
+    /// aggressively, then 100 -> 120pt on direct user feedback, each time in step with
+    /// `FloatingPanel`'s panel width (92 -> 110 -> 130pt — the two move together: the card
+    /// width was already at the exact max that fit under the panel's overlay-scroller clamp
+    /// margin each time, so widening the card past its ceiling required widening its container
+    /// too). This supersedes the specific 92pt figure from TASK-007's acceptance criteria;
+    /// TASK-007's own acceptance ("panel 92pt wide") was itself only ever an input sized to fit
+    /// TASK-008's original 84pt card, not an independent constraint.
+    static let cardSize = NSSize(width: 120, height: 64)
 
     private static let cornerRadius: CGFloat = 10
     private static let padding: CGFloat = 8
