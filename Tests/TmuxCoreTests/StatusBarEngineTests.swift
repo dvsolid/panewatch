@@ -21,6 +21,9 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
     }
 
     func capturePane(_ paneId: String) throws -> String { "" }
+
+    /// Unused by any test in this file — required to conform to `TmuxGateway`.
+    func run(_ arguments: [String]) throws -> String { "" }
 }
 
 /// A stand-in `ActivitySource` that records whatever `onOutput` handler `StatusBarEngine.init`

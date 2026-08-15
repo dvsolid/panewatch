@@ -13,6 +13,15 @@ public protocol TmuxGateway: Sendable {
     /// under an agent, making a busy pane look permanently idle (a real misdiagnosis SPEC §3.3
     /// corrects).
     func capturePane(_ paneId: String) throws -> String
+
+    /// Runs one administrative one-shot tmux subcommand and returns its stdout, throwing on a
+    /// non-zero exit — the same discipline as `listPanes`/`capturePane`, but for commands
+    /// (`new-session`, `select-window`, `kill-session`, ...) that don't need a dedicated
+    /// parsing method of their own. Backs the Preview Client's grouped-session lifecycle (see
+    /// `PreviewClientLifecycle`, `PreviewClientInvocation`, TASK-015) — the tmux binary is
+    /// still resolved via whatever `tmuxPath` the concrete gateway was constructed with, so
+    /// callers never need to (and never should) pass a bare command string here.
+    func run(_ arguments: [String]) throws -> String
 }
 
 /// The live `TmuxGateway`: shells out to the tmux binary resolved at `tmuxPath`, by absolute
@@ -39,6 +48,10 @@ public struct ProcessTmuxGateway: TmuxGateway {
 
     public func capturePane(_ paneId: String) throws -> String {
         try Self.run(Self.capturePaneInvocation(tmuxPath: tmuxPath, paneId: paneId))
+    }
+
+    public func run(_ arguments: [String]) throws -> String {
+        try Self.run((tmuxPath, arguments))
     }
 
     /// Extracted so tests can assert on the exact argument vector without spawning a real

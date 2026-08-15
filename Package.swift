@@ -10,11 +10,19 @@ let package = Package(
         .library(name: "TmuxCore", targets: ["TmuxCore"]),
         .executable(name: "TmuxerApp", targets: ["TmuxerApp"])
     ],
+    dependencies: [
+        // TASK-015: embeds the Hover Preview Popup's live terminal. TmuxerApp only, never
+        // TmuxCore — see CLAUDE.md ("TmuxCore must stay free of AppKit").
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.18.0")
+    ],
     targets: [
         // Pure logic — no AppKit, so it tests headlessly.
         .target(name: "TmuxCore"),
         .testTarget(name: "TmuxCoreTests", dependencies: ["TmuxCore"]),
         // AppKit/SwiftUI shell. Depends on TmuxCore, never the reverse — see CLAUDE.md.
-        .executableTarget(name: "TmuxerApp", dependencies: ["TmuxCore"])
+        .executableTarget(name: "TmuxerApp", dependencies: [
+            "TmuxCore",
+            .product(name: "SwiftTerm", package: "SwiftTerm")
+        ])
     ]
 )

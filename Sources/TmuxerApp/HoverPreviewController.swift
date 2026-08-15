@@ -28,10 +28,17 @@ final class HoverPreviewController: NSResponder {
     private static let closeGraceDelay: TimeInterval = 0.25
 
     /// Created lazily on first open, then reused for every subsequent Tile — repositioned and
-    /// re-shown rather than recreated, since TASK-014's content is a fixed placeholder. TASK-015
-    /// tears down/respawns the Preview Client per pane regardless of whether this window object
-    /// itself is reused.
+    /// re-shown rather than recreated. `previewClient`, not this window object, is what's torn
+    /// down/respawned per pane (see `close()`/`open(paneID:tileView:)`).
     private var popup: HoverPreviewPopup?
+    /// The Preview Client (glossary) backing whichever popup is currently open — a fresh
+    /// instance per `open(paneID:tileView:)` call, never reused across panes, so a new hover
+    /// never shows the previous pane's stale scrollback while its own attach is still spinning
+    /// up. `nil` whenever no popup is open. Held strongly for the same reason `proxies` is
+    /// (below): `PreviewClient` wires itself as `terminalView.processDelegate`, which SwiftTerm
+    /// declares `weak` — an unretained `PreviewClient` would deallocate immediately and
+    /// acceptance items 4/5 (pane/window closed, spawn failed) would silently never fire.
+    private var previewClient: PreviewClient?
     /// The pane whose popup is currently shown on screen. `nil` when no popup is open.
     private var activePaneID: String?
     /// The pane a dwell timer is currently counting down for — distinct from `activePaneID`
@@ -146,14 +153,44 @@ final class HoverPreviewController: NSResponder {
         panel.setFrame(frame, display: false)
         panel.orderFrontRegardless()
         activePaneID = paneID
+
+        startPreview(paneID: paneID, popup: panel)
     }
 
-    /// Idempotent — the one hook TASK-015 will extend to also tear down the Preview Client.
+    /// Creates this open's `PreviewClient`, embeds its terminal view into the popup, and
+    /// starts the attach. `open(paneID:tileView:)` only ever calls this when `previewClient`
+    /// is already `nil` — either the very first open, or after `close()` has torn down
+    /// whatever was there before (`tileMouseEntered`'s second-Tile-hover path always calls
+    /// `close()` before starting a new dwell) — so there's no old client to stop here first.
+    private func startPreview(paneID: String, popup: HoverPreviewPopup) {
+        let client = PreviewClient()
+        previewClient = client
+        client.onOutcome = { [weak self] outcome in
+            switch outcome {
+            case .unavailable:
+                // The spawn itself failed (acceptance item 5) — leave the popup open, showing
+                // the inline unavailable state, rather than closing it out from under the user.
+                self?.popup?.showUnavailable()
+            case .closed:
+                // The pane/window closed underneath an already-live preview (acceptance item
+                // 4) — `close()` is idempotent and also tears this client down.
+                self?.close()
+            }
+        }
+        popup.showTerminal(client.terminalView)
+        client.start(paneID: paneID)
+    }
+
+    /// Idempotent. Also tears down the active Preview Client (if any) — terminates its
+    /// process and its grouped tmux session, so `tmux list-clients` no longer lists it once
+    /// this returns (acceptance item 2).
     private func close() {
         cancelDwell()
         cancelClose()
         activePaneID = nil
         popup?.orderOut(nil)
+        previewClient?.stop()
+        previewClient = nil
     }
 
     private func cancelDwell() {
@@ -241,21 +278,47 @@ private final class TileHoverProxy: NSResponder {
 /// The Hover Preview Popup window itself — a small non-activating panel, sized per the feature
 /// spec's fixed ~420x260pt (TASK-014 acceptance item 4, not resizable: `.borderless` with no
 /// `.resizable` style bit, and nothing in `HoverPreviewController` ever changes its size). Body
-/// is a placeholder `NSTextField` for TASK-014; TASK-015 replaces it with a live SwiftTerm view.
+/// is either a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
+/// unavailable" state (`showUnavailable()`, acceptance item 5) — `HoverPreviewController` swaps
+/// between them per `PreviewClient.Outcome`.
 ///
 /// Mirrors `FloatingPanel`'s own posture for a window that must never steal focus: explicit
 /// `canBecomeKey`/`canBecomeMain` overrides on top of `.nonactivatingPanel`'s own default (see
 /// `FloatingPanel`'s doc comment for why the style mask alone isn't enough), `hidesOnDeactivate
 /// = false`, and a `collectionBehavior` that keeps it floating above all Spaces/full-screen apps
-/// the same way `FloatingPanel` does. This is also what makes TASK-015's read-only preview
-/// guarantee structural rather than a promise: a window that can never become key can never
-/// receive keystrokes to forward in the first place.
+/// the same way `FloatingPanel` does. This is also one half of TASK-015's read-only preview
+/// guarantee being structural rather than a promise: a window that can never become key can
+/// never receive keystrokes to forward in the first place (the other half is
+/// `ReadOnlyLocalProcessTerminalView.send`, `PreviewClient.swift`).
 @MainActor
 private final class HoverPreviewPopup: NSPanel {
     private static let cornerRadius: CGFloat = 12
+    /// Keeps the terminal/unavailable content off the card's rounded corners.
+    private static let contentInset: CGFloat = 10
+
+    /// Holds whichever of `showTerminal(_:)`/`showUnavailable()` is currently displayed, so
+    /// swapping between them is just "remove this container's subviews, add the new one" —
+    /// never touches `material` (the background) or the window's own content view.
+    private let innerContent: NSView
+    private let unavailableLabel: NSTextField
 
     init() {
         let size = HoverPopupPlacement.size
+        let innerContent = NSView(frame: NSRect(
+            x: Self.contentInset,
+            y: Self.contentInset,
+            width: size.width - Self.contentInset * 2,
+            height: size.height - Self.contentInset * 2
+        ))
+        innerContent.autoresizingMask = [.width, .height]
+        self.innerContent = innerContent
+
+        let unavailableLabel = NSTextField(labelWithString: "Preview unavailable")
+        unavailableLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        unavailableLabel.textColor = NSColor.white.withAlphaComponent(0.6)
+        unavailableLabel.alignment = .center
+        self.unavailableLabel = unavailableLabel
+
         super.init(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -289,22 +352,41 @@ private final class HoverPreviewPopup: NSPanel {
         material.layer?.masksToBounds = true
         content.addSubview(material)
 
-        // TASK-014: purely show/hide/position mechanics — no real terminal content yet.
-        // TASK-015 fills this with a live, read-only SwiftTerm view of the hovered pane.
-        let placeholder = NSTextField(labelWithString: "Preview")
-        placeholder.font = .systemFont(ofSize: 12, weight: .medium)
-        placeholder.textColor = NSColor.white.withAlphaComponent(0.6)
-        placeholder.sizeToFit()
-        placeholder.frame.origin = NSPoint(
-            x: (size.width - placeholder.frame.width) / 2,
-            y: (size.height - placeholder.frame.height) / 2
-        )
-        placeholder.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
-        content.addSubview(placeholder)
+        content.addSubview(innerContent)
+
+        unavailableLabel.frame = innerContent.bounds
+        unavailableLabel.autoresizingMask = [.width, .height]
+        unavailableLabel.isHidden = true
+        innerContent.addSubview(unavailableLabel)
 
         contentView = content
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// Displays a live terminal view (`PreviewClient.terminalView`), replacing whatever this
+    /// popup was showing before — a fresh `PreviewClient` per `open(paneID:tileView:)` means a
+    /// fresh view here too, so the previous pane's frame never lingers on screen while the new
+    /// attach is still spinning up.
+    func showTerminal(_ view: NSView) {
+        unavailableLabel.isHidden = true
+        clearTerminalViews()
+        view.frame = innerContent.bounds
+        view.autoresizingMask = [.width, .height]
+        innerContent.addSubview(view)
+    }
+
+    /// Acceptance item 5: the spawn failed outright — show the inline state instead of
+    /// whatever `showTerminal(_:)` last displayed (a blank/frozen terminal view).
+    func showUnavailable() {
+        clearTerminalViews()
+        unavailableLabel.isHidden = false
+    }
+
+    private func clearTerminalViews() {
+        for subview in innerContent.subviews where subview !== unavailableLabel {
+            subview.removeFromSuperview()
+        }
+    }
 }

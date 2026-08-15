@@ -29,6 +29,9 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
         defer { lock.unlock() }
         return captureCallCount[paneId] ?? 0
     }
+
+    /// Unused by any test in this file — required to conform to `TmuxGateway`.
+    func run(_ arguments: [String]) throws -> String { "" }
 }
 
 /// Deliberately far outside any plausible test runtime: `PollingActivitySource` starts its
