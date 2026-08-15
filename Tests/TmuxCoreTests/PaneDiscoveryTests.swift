@@ -23,6 +23,12 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
         ""
     }
 
+    /// Unused by any test in this file — `ClientDiscoveryTests` exercises `listClients` —
+    /// but required to conform to `TmuxGateway`.
+    func listClients() throws -> String {
+        ""
+    }
+
     /// Unused by any test in this file — required to conform to `TmuxGateway`.
     func run(_ arguments: [String]) throws -> String {
         ""

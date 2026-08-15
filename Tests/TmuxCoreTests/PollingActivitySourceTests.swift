@@ -17,6 +17,9 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
 
     func listPanes() throws -> String { "" }
 
+    /// Unused by any test in this file — required to conform to `TmuxGateway`.
+    func listClients() throws -> String { "" }
+
     func capturePane(_ paneId: String) throws -> String {
         lock.lock()
         defer { lock.unlock() }

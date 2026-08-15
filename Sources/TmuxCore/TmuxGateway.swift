@@ -8,6 +8,13 @@ public protocol TmuxGateway: Sendable {
     /// the whole topology.
     func listPanes() throws -> String
 
+    /// Runs one `list-clients` spawn and returns its raw stdout — the only source of "which
+    /// ttys have an attached tmux client right now." Feature spec § Architecture
+    /// (`ClientDiscovery`): backs the Preview Client spawn decision and the Switch resolution
+    /// path (TASK-016/TASK-018), same discipline as `listPanes` — one spawn, parsed by a
+    /// dedicated module, never re-derived ad hoc at each call site.
+    func listClients() throws -> String
+
     /// Captures one pane's visible screen. SPEC §3.1/§3.3: `-p -J`, and never `-S` — passing
     /// `-S` reads the normal screen's stale scrollback instead of the active alternate screen
     /// under an agent, making a busy pane look permanently idle (a real misdiagnosis SPEC §3.3
@@ -36,6 +43,11 @@ public struct ProcessTmuxGateway: TmuxGateway {
     /// again.
     static let paneFormat = "#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|#{window_activity}"
 
+    /// Feature spec § Architecture (`ClientDiscovery`): space-delimited, not pipe-delimited
+    /// like `paneFormat` — `list-clients` has only two fields and the spec's interface comment
+    /// fixes this exact string.
+    static let clientFormat = "#{client_tty} #{client_session}"
+
     public let tmuxPath: String
 
     public init(tmuxPath: String = TmuxCore.defaultTmuxPath) {
@@ -44,6 +56,10 @@ public struct ProcessTmuxGateway: TmuxGateway {
 
     public func listPanes() throws -> String {
         try Self.run(Self.listPanesInvocation(tmuxPath: tmuxPath))
+    }
+
+    public func listClients() throws -> String {
+        try Self.run(Self.listClientsInvocation(tmuxPath: tmuxPath))
     }
 
     public func capturePane(_ paneId: String) throws -> String {
@@ -59,6 +75,13 @@ public struct ProcessTmuxGateway: TmuxGateway {
     /// checking the executable slot and argument list, not just the path string.
     static func listPanesInvocation(tmuxPath: String) -> (executable: String, arguments: [String]) {
         (tmuxPath, ["list-panes", "-a", "-F", paneFormat])
+    }
+
+    /// Same never-bare-tmux discipline as `listPanesInvocation`; no `-t` — `list-clients`
+    /// without a target lists every attached client server-wide, which is what
+    /// `ClientDiscovery` needs (SPEC.md: never walk session-by-session).
+    static func listClientsInvocation(tmuxPath: String) -> (executable: String, arguments: [String]) {
+        (tmuxPath, ["list-clients", "-F", clientFormat])
     }
 
     /// SPEC §3.3: `-p -J` (visible screen, joined-wrapped lines), no `-S` — see the protocol

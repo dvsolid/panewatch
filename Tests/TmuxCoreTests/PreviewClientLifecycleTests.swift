@@ -18,6 +18,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
     var responses: [String: String] = [:]
 
     func listPanes() throws -> String { "" }
+    func listClients() throws -> String { "" }
     func capturePane(_ paneId: String) throws -> String { "" }
 
     func run(_ arguments: [String]) throws -> String {
