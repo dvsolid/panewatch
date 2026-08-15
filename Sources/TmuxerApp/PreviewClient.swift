@@ -58,6 +58,25 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
     private var spawnedAt: Date?
     private var didReportOutcome = false
 
+    /// The same Nerd Font family a real terminal/shell prompt on this machine uses, on user
+    /// request, so glyphs it draws (Powerline separators, git-branch icons, an agent's own
+    /// status-line icons) render as the intended glyph in the preview instead of a tofu box.
+    /// `Mono`, not the plain `JetBrainsMonoNL Nerd Font` family: the plain variant leaves icon
+    /// glyphs double-width, which breaks monospace cell alignment in a terminal render — `Mono`
+    /// patches them to single-width cells specifically so terminals can use it safely.
+    private static let preferredFontName = "JetBrainsMonoNL Nerd Font Mono"
+    /// A bit larger than the previous fixed 10pt, on user request.
+    private static let fontSize: CGFloat = 11
+
+    /// `NSFont(name:size:)` returns `nil` rather than silently substituting anything when the
+    /// named family isn't installed (unlike, say, an `NSAttributedString`'s automatic font
+    /// substitution) — fall back explicitly so a machine without this Nerd Font installed still
+    /// gets a working monospaced terminal font instead of this call site producing no font at
+    /// all.
+    private static func makeTerminalFont() -> NSFont {
+        NSFont(name: preferredFontName, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    }
+
     init(gateway: any TmuxGateway = ProcessTmuxGateway(), tmuxPath: String = TmuxCore.defaultTmuxPath) {
         self.lifecycle = PreviewClientLifecycle(gateway: gateway)
         self.tmuxPath = tmuxPath
@@ -69,9 +88,8 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         // 2031/7727) — harmless, but floods the log on every hover once real pane output with
         // those sequences arrives.
         terminalView.terminal.silentLog = true
-        // Smaller than SwiftTerm's default (the system font size, ~13pt) so the popup's fixed
-        // frame (`HoverPopupPlacement.size`) fits more rows/cols of real pane content.
-        terminalView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        // See `makeTerminalFont()`'s doc comment for the font choice and fallback.
+        terminalView.font = Self.makeTerminalFont()
         // Same bug class TASK-014's review caught on `NSTrackingArea.owner` (also `weak`):
         // without this wiring surviving past init, `processTerminated` would never reach a
         // live delegate and acceptance items 4/5 would be silently dead despite a green build.
@@ -112,11 +130,73 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
                     return
                 }
                 self.groupSession = groupSession
+                self.sizeTerminal(toWindowRows: groupSession.windowHeight)
                 let invocation = PreviewClientInvocation.attachInvocation(tmuxPath: tmuxPath, groupName: groupSession.groupName)
                 self.terminalView.startProcess(executable: invocation.executable, args: invocation.arguments)
             } catch {
                 self?.reportOutcome(.unavailable)
             }
+        }
+    }
+
+    /// Grows `terminalView`'s frame taller than the popup's visible box, if needed, until its
+    /// own row count is at least `windowRows` — the font never changes, so every preview reads
+    /// at the same size regardless of which pane it's showing. Must run before `startProcess`:
+    /// `LocalProcessTerminalView.getWindowSize()` reads the *current* `terminal.rows`/`.cols` to
+    /// size the spawned pty, so the grown row count has to already be in place by the time the
+    /// attach spawns, not applied as a resize afterward.
+    ///
+    /// Without this, a real window taller than the popup's fixed pixel budget
+    /// (`HoverPopupPlacement.size`) at this terminal's font leaves `-f ignore-size`
+    /// (`PreviewClientInvocation.attachInvocation`'s doc comment) showing this client a
+    /// viewport tmux positions around wherever the source pane's cursor currently sits — not
+    /// the window's top or bottom. Verified live against a real, zoomed Pi pane: the source
+    /// program's cursor sat well above the client's own row budget, so every row it painted
+    /// landed on a row number the client's buffer didn't have — the preview came back entirely
+    /// blank, not merely missing its bottom edge. Matching the client's row count to the real
+    /// window's removes the mismatch that makes tmux need to pick a sub-viewport at all.
+    ///
+    /// The grown frame keeps `origin = (0, 0)` within `HoverPreviewPopup`'s `innerContent`,
+    /// which clips its subviews (`HoverPreviewPopup.init`'s doc comment) — SwiftTerm draws row 0
+    /// (the *oldest* visible content) near the top of the view's own bounds and the last row
+    /// (the newest content — the prompt) near its bottom, in AppKit's unflipped coordinate
+    /// system (verified against `AppleTerminalView`'s `lineOrigin = frame.height - lineOffset`).
+    /// So growing the frame upward from a fixed `y = 0` and letting `innerContent` clip
+    /// whatever now extends above it keeps the *bottom* of the real window in view — the most
+    /// relevant part, and what a live glance actually needs — rather than an arbitrary,
+    /// tmux-chosen slice.
+    ///
+    /// An earlier version of this fix shrank the font instead of growing the frame, to
+    /// guarantee full coverage within the popup's fixed box. Live user feedback on a real,
+    /// very tall window (240x53) found the result close to unreadable, and inconsistent from
+    /// preview to preview since each window needed a different amount of shrinking — growing
+    /// the frame and clipping keeps one fixed, legible font for every preview instead.
+    ///
+    /// Deliberately grows rows only, not columns — a window wider than the client just clips
+    /// the right edge of each visible line (same as any narrower-than-content terminal), which
+    /// degrades far more gracefully than a whole row going missing, and nobody has actually
+    /// reported the horizontal case.
+    ///
+    /// Not `private`: `PreviewClientSizeTerminalTests` (`TmuxerAppTests`) calls this directly
+    /// against a frame sized exactly like `HoverPreviewPopup`'s `innerContent` — the one path
+    /// this module can't verify by running the app (this session has no native-GUI-automation
+    /// tool to actually hover a Tile), so exercising the real SwiftTerm geometry call chain
+    /// (`terminalView.frame =` → `processSizeChange(newSize:)` → `terminal.cols`/`.rows`) head-on
+    /// is the closest substitute for watching it happen live.
+    func sizeTerminal(toWindowRows windowRows: Int) {
+        guard windowRows > 0 else { return }
+        let visibleRows = terminalView.terminal.rows
+        guard visibleRows < windowRows, visibleRows > 0 else { return }
+
+        let visibleFrame = terminalView.frame
+        var candidateHeight = visibleFrame.height * CGFloat(windowRows) / CGFloat(visibleRows)
+
+        // The analytic first guess can still fall a cell short once `processSizeChange`'s
+        // pixel-to-cell rounding kicks in — grow in small steps rather than solving it exactly.
+        for _ in 0..<8 {
+            terminalView.frame = CGRect(x: 0, y: 0, width: visibleFrame.width, height: candidateHeight)
+            if terminalView.terminal.rows >= windowRows { return }
+            candidateHeight *= 1.1
         }
     }
 

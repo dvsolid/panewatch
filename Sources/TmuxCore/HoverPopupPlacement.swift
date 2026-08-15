@@ -7,9 +7,15 @@ import CoreGraphics
 /// AppKit, so this needs no `import AppKit` and no new `Package.swift` dependency.
 public enum HoverPopupPlacement {
     /// Feature spec's fixed popup size (TASK-014 acceptance item 4) — not resizable. Bumped
-    /// from the original 420x260 so a smaller terminal font (`PreviewClient.terminalView.font`)
-    /// actually buys more visible rows/cols instead of just more padding.
-    public static let size = CGSize(width: 640, height: 420)
+    /// from the original 420x260 to 640x420 so a smaller terminal font
+    /// (`PreviewClient.terminalView.font`) actually buys more visible rows/cols instead of just
+    /// more padding, then bumped again here to 760x620 on direct user feedback wanting more
+    /// visible content per preview. The terminal's font stays fixed regardless of this size —
+    /// when a real tmux window has more rows than this box fits at that font,
+    /// `PreviewClient.sizeTerminal(toWindowRows:)` grows the terminal view past it and clips the
+    /// overflow rather than shrinking the font; see that method's doc comment for why an
+    /// earlier version tried shrinking the font to fit instead, and why that was abandoned.
+    public static let size = CGSize(width: 760, height: 620)
 
     /// Gap between a Tile's edge and the popup. Kept small on purpose: `HoverPreviewController`
     /// cancels its close-grace timer on entering either the Tile or the popup, and a small gap

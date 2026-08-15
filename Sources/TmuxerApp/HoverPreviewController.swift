@@ -580,10 +580,11 @@ private final class TileHoverProxy: NSResponder {
     }
 }
 
-/// The Hover Preview Popup window itself — a small non-activating panel, sized per the feature
-/// spec's fixed ~640x420pt (TASK-014 acceptance item 4, not resizable: `.borderless` with no
-/// `.resizable` style bit, and nothing in `HoverPreviewController` ever changes its size). Body
-/// is either a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
+/// The Hover Preview Popup window itself — a small non-activating panel, sized per
+/// `HoverPopupPlacement.size` (TASK-014 acceptance item 4, not resizable: `.borderless` with no
+/// `.resizable` style bit, and nothing in `HoverPreviewController` ever changes its size). See
+/// that constant's doc comment for why it's 760x620, not the feature spec's original ~640x420.
+/// Body is either a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
 /// unavailable" state (`showUnavailable()`, acceptance item 5) — `HoverPreviewController` swaps
 /// between them per `PreviewClient.Outcome`.
 ///
@@ -616,6 +617,11 @@ private final class HoverPreviewPopup: NSPanel {
             height: size.height - Self.contentInset * 2
         ))
         innerContent.autoresizingMask = [.width, .height]
+        // `PreviewClient.sizeTerminal(toWindowRows:)` deliberately grows its terminal view
+        // taller than this container when the real tmux window has more rows than fit here —
+        // clip that overflow rather than letting it spill past the card's rounded corners.
+        innerContent.wantsLayer = true
+        innerContent.layer?.masksToBounds = true
         self.innerContent = innerContent
 
         let unavailableLabel = NSTextField(labelWithString: "Preview unavailable")
@@ -674,11 +680,19 @@ private final class HoverPreviewPopup: NSPanel {
     /// popup was showing before — a fresh `PreviewClient` per `open(paneID:tileView:)` means a
     /// fresh view here too, so the previous pane's frame never lingers on screen while the new
     /// attach is still spinning up.
+    ///
+    /// Only `.width` autoresizes, not `.height`: this starting frame is `innerContent.bounds`
+    /// (so `PreviewClient.start(paneID:)` can read a real `terminal.rows` baseline before it
+    /// knows the target pane's window height), but `PreviewClient.sizeTerminal(toWindowRows:)`
+    /// then grows `view.frame`'s height past this container's own — matching `.height` here
+    /// would fight that by snapping it back down were `innerContent` ever to resize (it never
+    /// does; the popup is fixed-size, but this keeps the intent explicit rather than relying on
+    /// that never happening).
     func showTerminal(_ view: NSView) {
         unavailableLabel.isHidden = true
         clearTerminalViews()
         view.frame = innerContent.bounds
-        view.autoresizingMask = [.width, .height]
+        view.autoresizingMask = [.width]
         innerContent.addSubview(view)
     }
 

@@ -80,7 +80,10 @@ import Testing
     /// it (verified live: a window with a split pane returned multiple rows for one `-t`
     /// target) — the format must carry `#{pane_id}` alongside `#{window_index}` so
     /// `PreviewClientLifecycle` can pick the row that actually matches, not just the first line.
-    @Test func paneLookupArgumentsRequestsBothPaneIDAndWindowIndex() {
-        #expect(PreviewClientInvocation.paneLookupArguments(paneID: "%51") == ["list-panes", "-t", "%51", "-F", "#{pane_id} #{window_index}"])
+    /// `#{window_height}` rides along on the same row so `PreviewClientLifecycle` can size the
+    /// Preview Client's terminal to the real window without a second gateway round trip — see
+    /// `GroupSession.windowHeight`'s doc comment for why that number matters.
+    @Test func paneLookupArgumentsRequestsPaneIDWindowIndexAndWindowHeight() {
+        #expect(PreviewClientInvocation.paneLookupArguments(paneID: "%51") == ["list-panes", "-t", "%51", "-F", "#{pane_id} #{window_index} #{window_height}"])
     }
 }

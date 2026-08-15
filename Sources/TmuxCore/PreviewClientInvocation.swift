@@ -54,13 +54,16 @@ public enum PreviewClientInvocation {
         "\(groupSessionPrefix)\(paneID.dropFirst())"
     }
 
-    /// Resolves whether `paneID` still exists and, if so, which window holds it. `-t
-    /// <paneID>` for `list-panes` resolves to the pane's *window*, listing every pane in it
-    /// (verified live: a window with a split returns multiple rows for one `-t` target) —
-    /// the format carries `#{pane_id}` alongside `#{window_index}` so the caller can pick
-    /// the exact matching row rather than trust the first line.
+    /// Resolves whether `paneID` still exists and, if so, which window holds it and how tall
+    /// that window really is. `-t <paneID>` for `list-panes` resolves to the pane's *window*,
+    /// listing every pane in it (verified live: a window with a split returns multiple rows
+    /// for one `-t` target) — the format carries `#{pane_id}` alongside `#{window_index}` and
+    /// `#{window_height}` so the caller can pick the exact matching row rather than trust the
+    /// first line. `#{window_height}` rides along on this same lookup (rather than a second
+    /// `display-message` round trip) purely because it's free here — see `GroupSession
+    /// .windowHeight`'s doc comment for what it's actually used for.
     public static func paneLookupArguments(paneID: String) -> [String] {
-        ["list-panes", "-t", paneID, "-F", "#{pane_id} #{window_index}"]
+        ["list-panes", "-t", paneID, "-F", "#{pane_id} #{window_index} #{window_height}"]
     }
 
     public static func killGroupArguments(groupName: String) -> [String] {

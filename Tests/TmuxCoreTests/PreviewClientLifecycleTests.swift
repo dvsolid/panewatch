@@ -47,10 +47,10 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
     private let paneID = "%51"
     private let groupName = "tmuxer-preview-51"
 
-    private func makeGatewayWithExistingPane(windowIndex: Int = 2) -> ScriptedTmuxGateway {
+    private func makeGatewayWithExistingPane(windowIndex: Int = 2, windowHeight: Int = 40) -> ScriptedTmuxGateway {
         let gateway = ScriptedTmuxGateway()
         gateway.setResponse(
-            "%51 \(windowIndex)",
+            "%51 \(windowIndex) \(windowHeight)",
             for: PreviewClientInvocation.paneLookupArguments(paneID: paneID)
         )
         return gateway
@@ -66,7 +66,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
 
         let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
-        #expect(result == PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true))
+        #expect(result == PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true, windowHeight: 40))
         #expect(gateway.calls == [
             PreviewClientInvocation.paneLookupArguments(paneID: paneID),
             PreviewClientInvocation.killGroupArguments(groupName: groupName),
@@ -121,20 +121,23 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
 
     /// `list-panes -t <pane>` resolves to the pane's *window* and can list multiple rows
     /// (verified live for a split window) — the lookup must pick the row matching the exact
-    /// pane id, not just the first line.
+    /// pane id, not just the first line. Both the window index and the window height come from
+    /// that same matching row — a naive first-line read would silently carry over the wrong
+    /// window's height too.
     @Test func prepareGroupSessionPicksTheMatchingRowWhenTheWindowHasMultiplePanes() throws {
         let gateway = ScriptedTmuxGateway()
         gateway.setResponse(
-            "%50 1\n%51 2",
+            "%50 1 20\n%51 2 40",
             for: PreviewClientInvocation.paneLookupArguments(paneID: paneID)
         )
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        _ = try lifecycle.prepareGroupSession(paneID: paneID)
+        let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
         #expect(gateway.calls.contains(
             PreviewClientInvocation.selectWindowArguments(groupName: groupName, windowIndex: 2)
         ))
+        #expect(result.windowHeight == 40)
     }
 
     /// The pre-cleanup `kill-session` is best-effort — a first-ever preview for a pane has no
@@ -170,7 +173,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let gateway = ScriptedTmuxGateway()
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false, windowHeight: 40))
 
         #expect(gateway.calls == [PreviewClientInvocation.killGroupArguments(groupName: groupName)])
     }
@@ -182,7 +185,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let gateway = ScriptedTmuxGateway()
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true, windowHeight: 40))
 
         #expect(gateway.calls == [
             PreviewClientInvocation.toggleZoomArguments(groupName: groupName),
@@ -198,6 +201,6 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         gateway.fail(PreviewClientInvocation.killGroupArguments(groupName: groupName))
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false, windowHeight: 40))
     }
 }

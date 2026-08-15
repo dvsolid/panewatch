@@ -24,6 +24,20 @@ public struct PreviewClientLifecycle: Sendable {
     public struct GroupSession: Sendable, Equatable {
         public let groupName: String
         public let zoomedByUs: Bool
+        /// `#{window_height}` of the real tmux window behind this group, captured at prepare
+        /// time (before the attach spawns) — `-f ignore-size` (`PreviewClientInvocation
+        /// .attachInvocation`'s doc comment) means tmux never shrinks that window to fit an
+        /// undersized Preview Client, so a client with fewer rows than this number gets a
+        /// viewport tmux positions around wherever the pane's cursor currently sits, not the
+        /// window's true top or bottom. Verified live against a real zoomed Pi pane (window
+        /// taller than the popup's default-font row budget): content tmux wrote at rows beyond
+        /// the client's own row count never appeared at all — not merely a truncated bottom
+        /// edge, the whole screen came back blank, because every line the source program
+        /// painted landed on a row number the client's own buffer doesn't have. `PreviewClient`
+        /// (TmuxerApp) reads this before spawning the attach and shrinks its terminal's font
+        /// until its own row count is at least this, so the client can always show the window's
+        /// full height regardless of where the source program's cursor happens to rest.
+        public let windowHeight: Int
     }
 
     public let gateway: any TmuxGateway
@@ -59,20 +73,24 @@ public struct PreviewClientLifecycle: Sendable {
     ///    preview.
     public func prepareGroupSession(paneID: String) throws -> GroupSession {
         let groupName = PreviewClientInvocation.groupSessionName(paneID: paneID)
-        let windowIndex = try resolveWindowIndex(paneID: paneID)
+        let geometry = try resolveWindowGeometry(paneID: paneID)
 
         _ = try? gateway.run(PreviewClientInvocation.killGroupArguments(groupName: groupName))
 
         do {
             _ = try gateway.run(PreviewClientInvocation.createGroupArguments(paneID: paneID, groupName: groupName))
-            _ = try gateway.run(PreviewClientInvocation.selectWindowArguments(groupName: groupName, windowIndex: windowIndex))
+            _ = try gateway.run(PreviewClientInvocation.selectWindowArguments(groupName: groupName, windowIndex: geometry.windowIndex))
             _ = try gateway.run(PreviewClientInvocation.selectPaneArguments(paneID: paneID))
         } catch {
             _ = try? gateway.run(PreviewClientInvocation.killGroupArguments(groupName: groupName))
             throw error
         }
 
-        return GroupSession(groupName: groupName, zoomedByUs: zoomIfNeeded(groupName: groupName))
+        return GroupSession(
+            groupName: groupName,
+            zoomedByUs: zoomIfNeeded(groupName: groupName),
+            windowHeight: geometry.windowHeight
+        )
     }
 
     /// Best-effort: a group session that was never created (prepare failed at step 1) has
@@ -99,15 +117,21 @@ public struct PreviewClientLifecycle: Sendable {
         return (try? gateway.run(PreviewClientInvocation.toggleZoomArguments(groupName: groupName))) != nil
     }
 
+    private struct WindowGeometry {
+        let windowIndex: Int
+        let windowHeight: Int
+    }
+
     /// `list-panes -t <paneID>` resolves to the pane's *window* and can return one row per
     /// pane in it — pick the row whose `#{pane_id}` matches exactly rather than trust the
-    /// first line (see `PreviewClientInvocation.paneLookupArguments`'s doc comment).
-    private func resolveWindowIndex(paneID: String) throws -> Int {
+    /// first line (see `PreviewClientInvocation.paneLookupArguments`'s doc comment). Both the
+    /// window index and its height come from that same matching row, never a different one.
+    private func resolveWindowGeometry(paneID: String) throws -> WindowGeometry {
         let output = try gateway.run(PreviewClientInvocation.paneLookupArguments(paneID: paneID))
         for line in output.split(separator: "\n") {
             let fields = line.split(separator: " ")
-            if fields.count == 2, fields[0] == paneID, let index = Int(fields[1]) {
-                return index
+            if fields.count == 3, fields[0] == paneID, let index = Int(fields[1]), let height = Int(fields[2]) {
+                return WindowGeometry(windowIndex: index, windowHeight: height)
             }
         }
         throw PaneNotFound(paneID: paneID)

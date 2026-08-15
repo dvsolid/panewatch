@@ -13,11 +13,12 @@ import Testing
     /// never room to open the popup on the right — this is the realistic case, not an edge case.
     private let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
 
-    /// Feature spec's fixed popup size (TASK-014 acceptance item 4) — none of the other tests
-    /// below check the returned rect's dimensions, only its position, so this is the only test
-    /// that would catch a regression to the literal 640x420 size.
-    @Test func sizeIsTheFeatureSpecsFixed640By420() {
-        #expect(HoverPopupPlacement.size == CGSize(width: 640, height: 420))
+    /// The popup's fixed size (`HoverPopupPlacement.size`'s own doc comment has the legibility
+    /// investigation behind the 760x620 figure) — none of the other tests below check the
+    /// returned rect's dimensions, only its position, so this is the only test that would catch
+    /// a regression to a different literal size.
+    @Test func sizeIsTheFixed760By620() {
+        #expect(HoverPopupPlacement.size == CGSize(width: 760, height: 620))
 
         let tile = CGRect(x: 1400, y: 400, width: 120, height: 64)
         let popup = HoverPopupPlacement.frame(forTile: tile, within: screen)
