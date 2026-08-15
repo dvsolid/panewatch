@@ -54,15 +54,36 @@ public struct ProcessTmuxGateway: TmuxGateway {
         (tmuxPath, ["capture-pane", "-t", paneId, "-p", "-J"])
     }
 
+    struct CommandFailed: Error {
+        let terminationStatus: Int32
+    }
+
+    /// Throws on a non-zero exit rather than trusting whatever landed on stdout — the same
+    /// discipline `ProcessTableDescendantInspector.snapshotProcessTable` uses for `ps`. Without
+    /// this, a pane that closes between a discovery scan and the next `capture-pane` probe (a
+    /// routine race, not a rare edge case) makes tmux exit non-zero, and this silently returned
+    /// its empty stdout as if the pane were genuinely blank instead of gone.
+    ///
+    /// `standardError` is explicitly discarded (`.nullDevice`), not left unset: `Process`
+    /// inherits the parent's stderr by default, so tmux's own error text (e.g. `can't find
+    /// pane: %81`) would otherwise leak straight into whatever terminal or log is watching this
+    /// app's stderr — a real, user-visible symptom of the same missing-pane race this throw
+    /// fixes. Callers already treat a thrown error as "skip this pane/pass" (`PollingActivitySource`
+    /// via `try?`, `StatusBarEngine.reconcile` via `throws`), so the failure is handled, never
+    /// printed.
     private static func run(_ invocation: (executable: String, arguments: [String])) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executable)
         process.arguments = invocation.arguments
         let pipe = Pipe()
         process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CommandFailed(terminationStatus: process.terminationStatus)
+        }
         return String(data: data, encoding: .utf8) ?? ""
     }
 }
