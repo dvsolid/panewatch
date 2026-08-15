@@ -72,12 +72,14 @@ import Testing
         #expect(Set(scripts).count == scripts.count)
     }
 
-    /// Ghostty's script has no `tty` term to search by (see `ghosttyScript`'s doc comment), so
-    /// it must try, in order: an exact title match against the tab's freshly-attached title,
-    /// then a working-directory match, then fall back to a bare `activate`. This only checks
-    /// script *shape* (both match clauses present, in order, `activate` last) — the match
-    /// actually working was verified live against the real, currently-installed Ghostty.
-    @Test func ghosttyScriptTriesTitleThenWorkingDirectoryThenActivate() {
+    /// Ghostty's script must `activate` the app unconditionally first — `focus` alone never
+    /// raises Ghostty above other apps when it's in the background (this was the actual bug:
+    /// double-clicking a Tile while Ghostty sat behind another app did nothing) — then try, in
+    /// order, an exact title match against the tab's freshly-attached title, then a
+    /// working-directory match. This only checks script *shape* (`activate` before both match
+    /// clauses, both present, title before path) — the match actually working was verified live
+    /// against the real, currently-installed Ghostty.
+    @Test func ghosttyScriptActivatesFirstThenTriesTitleThenWorkingDirectory() {
         let planner = SwitchActionPlanner()
         let client = AttachedClient(tty: "/dev/ttys030", owningApp: .ghostty(pid: 1))
 
@@ -89,11 +91,11 @@ import Testing
         #expect(script.contains("\"tmux attach -t ztest1\""))
         #expect(script.contains("\"/Users/user/Projects/acme/ztest1\""))
         #expect(script.contains("activate"))
+        let activateIndex = try! #require(script.range(of: "activate"))
         let titleClauseIndex = try! #require(script.range(of: "tmux attach -t ztest1"))
         let pathClauseIndex = try! #require(script.range(of: "/Users/user/Projects/acme/ztest1"))
-        let activateIndex = try! #require(script.range(of: "activate"))
+        #expect(activateIndex.lowerBound < titleClauseIndex.lowerBound)
         #expect(titleClauseIndex.lowerBound < pathClauseIndex.lowerBound)
-        #expect(pathClauseIndex.lowerBound < activateIndex.lowerBound)
     }
 
     /// A session name or path containing a double quote or backslash must not break out of the

@@ -95,22 +95,26 @@ public struct SwitchActionPlanner: Sendable {
     /// before tmux's own dynamic title-setting (if any) overwrites it; 2) `working directory`
     /// equals the pane's own `pane_current_path` — survives a renamed tab, but isn't unique
     /// when multiple panes share a cwd (picks whichever terminal Ghostty's `first` returns).
-    /// Falls back to activating the app only, same as before, when neither matches (e.g. the
-    /// tab's title has drifted *and* its cwd doesn't match, or it's simply not open in Ghostty
-    /// at the expected place). The target tty is kept as a comment for traceability even though
-    /// it isn't used for matching.
+    /// `activate` always runs first, unconditionally — `focus` alone only switches the target
+    /// window/tab *within* Ghostty's own window ordering; it does not raise the app above other
+    /// apps' windows when Ghostty isn't already frontmost (verified live: double-clicking a Tile
+    /// while Ghostty sat in the background left it behind the active app, focus silently doing
+    /// nothing useful without an app-level activate first). When neither match clause finds a
+    /// terminal (e.g. the tab's title has drifted *and* its cwd doesn't match, or it's simply not
+    /// open in Ghostty at the expected place), `activate` alone still surfaces the app — the same
+    /// fallback as before, just no longer gated behind the `else`. The target tty is kept as a
+    /// comment for traceability even though it isn't used for matching.
     private static func ghosttyScript(sessionName: String, currentPath: String, tty: String) -> String {
         let titleMatch = "\"tmux attach -t \(escapeForAppleScript(sessionName))\""
         let pathMatch = "\"\(escapeForAppleScript(currentPath))\""
         return """
         -- target tty: \(tty)
         tell application "Ghostty"
+            activate
             if exists (first terminal whose name is \(titleMatch)) then
                 focus (first terminal whose name is \(titleMatch))
             else if exists (first terminal whose working directory is \(pathMatch)) then
                 focus (first terminal whose working directory is \(pathMatch))
-            else
-                activate
             end if
         end tell
         """
