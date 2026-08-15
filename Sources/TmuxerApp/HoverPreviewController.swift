@@ -482,7 +482,10 @@ final class HoverPreviewController: NSResponder {
     /// already found running, so no availability check is needed for them.
     nonisolated private static func resolveOpenNewPreferredApp(_ preferredApp: SupportedTerminalApp?) -> SupportedTerminalApp? {
         switch preferredApp {
-        case .none, .ghostty:
+        case .none, .ghostty, .cursor:
+            // `.cursor` has no open-new mechanism (TASK-022) — routes through the same
+            // availability-checked default as "no client attached at all", never a
+            // Cursor-specific path.
             return TerminalAppCatalog.defaultOpenNewApp {
                 NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil
             }

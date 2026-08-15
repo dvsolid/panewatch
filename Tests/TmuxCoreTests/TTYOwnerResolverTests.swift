@@ -59,8 +59,27 @@ import Testing
         #expect(result == .terminalApp(pid: 120))
     }
 
+    @Test func ownerAncestorChainIncludingCursorResolvesToCursor() throws {
+        // Real observed process ancestry for a tmux client attached inside Cursor's
+        // integrated terminal (feature spec Further Notes, live-verified against the
+        // installed Cursor.app): the pane's shell's parent is `Cursor Helper: terminal
+        // pty-host`, whose parent is the main `Cursor` binary. The basename match fires at
+        // the pty-host hop — its command's first whitespace-separated token is `Cursor`, one
+        // level above the shell — never reaching the main binary.
+        let ps = try makeFakePS(body: """
+        echo '140 1 ??      /Applications/Cursor.app/Contents/MacOS/Cursor'
+        echo '240 140 ttys009 Cursor Helper: terminal pty-host'
+        echo '340 240 ttys009 -zsh'
+        """)
+        let resolver = ProcessTableTTYOwnerResolver(psExecutableURL: ps)
+
+        let result = resolver.resolveOwningApp(tty: "ttys009")
+
+        #expect(result == .cursor(pid: 240))
+    }
+
     @Test func ancestorChainWithNoSupportedAppReturnsNil() throws {
-        // Ancestor chain tops out at an unrelated launcher, never any of the three supported
+        // Ancestor chain tops out at an unrelated launcher, never any of the supported
         // terminal apps — e.g. a pane reached via ssh from an unrecognized wrapper.
         let ps = try makeFakePS(body: """
         echo '130 1 ??      /usr/libexec/some-unrelated-launcher'

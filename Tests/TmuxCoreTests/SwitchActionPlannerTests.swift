@@ -56,6 +56,7 @@ import Testing
             (.ghostty(pid: 1), "Ghostty"),
             (.iTerm2(pid: 2), "iTerm2"),
             (.terminalApp(pid: 3), "Terminal"),
+            (.cursor(pid: 4), "Cursor"),
         ]
 
         let scripts = apps.map { app, expectedAppName -> String in
@@ -96,6 +97,24 @@ import Testing
         let pathClauseIndex = try! #require(script.range(of: "/Users/user/Projects/acme/ztest1"))
         #expect(activateIndex.lowerBound < titleClauseIndex.lowerBound)
         #expect(titleClauseIndex.lowerBound < pathClauseIndex.lowerBound)
+    }
+
+    /// Cursor ships no `.sdef` scripting dictionary (feature spec Further Notes,
+    /// live-verified) — its focus script can only `activate` the app, unlike the other three
+    /// apps' tab/window-level selection.
+    @Test func attachedClientWithCursorFocusesExistingWithAnActivateOnlyScript() {
+        let planner = SwitchActionPlanner()
+        let client = AttachedClient(tty: "/dev/ttys033", owningApp: .cursor(pid: 4))
+
+        let action = planner.plan(target: target, attachedClient: client)
+
+        guard case .focusExisting(let app, let script) = action else {
+            Issue.record("expected .focusExisting, got \(action)")
+            return
+        }
+        #expect(app == .cursor(pid: 4))
+        #expect(script.contains("tell application \"Cursor\""))
+        #expect(script.contains("activate"))
     }
 
     /// A session name or path containing a double quote or backslash must not break out of the

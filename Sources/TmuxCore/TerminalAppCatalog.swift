@@ -69,7 +69,22 @@ public enum TerminalAppCatalog {
         }
     )
 
-    public static let all: [TerminalAppProfile] = [ghostty, iTerm2, terminalApp]
+    /// Cursor ships no `.sdef` scripting dictionary at all (live-verified against the installed
+    /// Cursor.app — feature spec Further Notes), so unlike the other three profiles there's no
+    /// tab/window-level selection available; `activate` is the only usable verb. Its executable
+    /// basename never appears directly in the ancestor chain from a tmux client's tty — the
+    /// match instead fires one hop up, at `Cursor Helper: terminal pty-host`, whose `command`
+    /// field's first whitespace-separated token is `Cursor` (live-verified, `ps -o command=`
+    /// against a real Cursor-integrated-terminal tty). `openNewAction` is left `nil`: no
+    /// scriptable way to launch a new attached terminal inside Cursor's integrated terminal;
+    /// `SwitchInvocation.openNewAction` falls through to the default open-new target for that.
+    public static let cursor = TerminalAppProfile(
+        processBasenames: ["cursor"],
+        makeApp: { .cursor(pid: $0) },
+        focusScript: { _, tty in cursorFocusScript(tty: tty) }
+    )
+
+    public static let all: [TerminalAppProfile] = [ghostty, iTerm2, terminalApp, cursor]
 
     /// Used by `TTYOwnerResolver`'s ancestor-walk matcher: which profile (if any) recognizes
     /// this executable basename.
@@ -84,6 +99,7 @@ public enum TerminalAppCatalog {
         case .ghostty: return ghostty
         case .iTerm2: return iTerm2
         case .terminalApp: return terminalApp
+        case .cursor: return cursor
         }
     }
 
@@ -134,6 +150,21 @@ public enum TerminalAppCatalog {
                     end repeat
                 end repeat
             end repeat
+        end tell
+        """
+    }
+
+    /// Cursor has no scripting dictionary at all (see `cursor`'s doc comment above) —
+    /// `activate` is the only verb available, so unlike the other three profiles there's no
+    /// tab/window-level selection to build. `tty` isn't a match key here (nothing to match
+    /// against), but is embedded as a comment anyway — same traceability role it plays in
+    /// `ghosttyFocusScript`'s leading comment, and it keeps this profile's script
+    /// distinguishable per-target the same way the other three are.
+    private static func cursorFocusScript(tty: String) -> String {
+        """
+        -- target tty: \(tty)
+        tell application "Cursor"
+            activate
         end tell
         """
     }

@@ -44,6 +44,18 @@ import Testing
         ))
     }
 
+    /// Cursor has no scriptable "open a new attached terminal" mechanism at all (TASK-022) —
+    /// `TerminalAppCatalog.cursor.openNewAction` is `nil`, so this falls through to the same
+    /// default as no-preference/Ghostty, never a Cursor-specific path.
+    @Test func openNewActionWithCursorPreferredAppMatchesTheNoPreferenceDefault() {
+        let action = SwitchInvocation.openNewAction(preferredApp: .cursor(pid: 999), tmuxPath: "/opt/homebrew/bin/tmux", paneId: "%51")
+
+        #expect(action == .launchProcess(
+            executable: "/usr/bin/open",
+            arguments: ["-n", "-a", "Ghostty", "--args", "-e", "/opt/homebrew/bin/tmux", "attach", "-t", "%51"]
+        ))
+    }
+
     /// iTerm2 exposes a "run this command in a new window" scripting verb directly — no
     /// separate process-launch step needed first, unlike Ghostty (see
     /// `SwitchActionPlanner.ghosttyScript`'s doc comment on why Ghostty's own dictionary has

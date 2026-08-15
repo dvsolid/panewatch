@@ -1,14 +1,15 @@
 import Foundation
 
-/// One of the three terminal apps `TTYOwnerResolver` knows how to recognize, carrying the pid
-/// of the matched ancestor process — feature spec § Architecture: TTYOwnerResolver.
+/// One of the terminal apps `TTYOwnerResolver` knows how to recognize, carrying the pid of the
+/// matched ancestor process — feature spec § Architecture: TTYOwnerResolver.
 public enum SupportedTerminalApp: Sendable, Equatable {
     case ghostty(pid: Int32)
     case iTerm2(pid: Int32)
     case terminalApp(pid: Int32)
+    case cursor(pid: Int32)
 }
 
-/// Resolves which of the three supported terminal apps (if any) owns a given tty, by snapshotting
+/// Resolves which of the supported terminal apps (if any) owns a given tty, by snapshotting
 /// the process table and walking *upward* from the process(es) attached to that tty — the
 /// ancestor-walk mirror of `DescendantProcessInspector`'s downward walk. Used by Switch (TASK-018)
 /// to decide whether a pane's attached tmux client has an existing terminal window that can be

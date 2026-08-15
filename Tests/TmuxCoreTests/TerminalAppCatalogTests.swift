@@ -30,6 +30,12 @@ import Testing
         #expect(profile?.makeApp(120) == .terminalApp(pid: 120))
     }
 
+    @Test func matchResolvesCursorBasename() {
+        let profile = TerminalAppCatalog.match(basename: "cursor")
+
+        #expect(profile?.makeApp(140) == .cursor(pid: 140))
+    }
+
     @Test func matchReturnsNilForAnUnrecognizedBasename() {
         #expect(TerminalAppCatalog.match(basename: "some-unrelated-launcher") == nil)
     }
@@ -61,6 +67,17 @@ import Testing
         #expect(script.contains("tty of t is \"/dev/ttys030\""))
     }
 
+    /// Cursor ships no scripting dictionary — `activate` is the only verb available, so unlike
+    /// the other three profiles there's no tab/window-level match clause to assert on. `tty` is
+    /// still embedded (as a comment, see the profile's doc comment) for traceability.
+    @Test func cursorProfileFocusScriptIsActivateOnly() {
+        let script = TerminalAppCatalog.profile(for: .cursor(pid: 4)).focusScript(Self.target, "/dev/ttys030")
+
+        #expect(script.contains("tell application \"Cursor\""))
+        #expect(script.contains("activate"))
+        #expect(script.contains("/dev/ttys030"))
+    }
+
     // MARK: - profile(for:).openNewAction
 
     @Test func ghosttyProfileOpenNewActionLaunchesANewInstance() {
@@ -88,6 +105,15 @@ import Testing
         }
         #expect(script.contains("tell application \"Terminal\""))
         #expect(script.contains("/opt/homebrew/bin/tmux attach -t %51"))
+    }
+
+    /// The load-bearing property of the whole Cursor profile: `nil` here is what makes
+    /// `SwitchInvocation.openNewAction`'s fallback fire for `.cursor` instead of crashing on a
+    /// force-unwrap or scripting a mechanism that doesn't exist. Asserted directly so a future
+    /// change that accidentally supplies an `openNewAction:` for Cursor fails a test at the
+    /// catalog level, not silently downstream.
+    @Test func cursorProfileHasNoOpenNewAction() {
+        #expect(TerminalAppCatalog.profile(for: .cursor(pid: 4)).openNewAction == nil)
     }
 
     // MARK: - defaultOpenNewApp(isGhosttyAvailable:)
