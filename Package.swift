@@ -23,6 +23,7 @@ let package = Package(
         .executableTarget(name: "TmuxerApp", dependencies: [
             "TmuxCore",
             .product(name: "SwiftTerm", package: "SwiftTerm")
-        ])
+        ]),
+        .testTarget(name: "TmuxerAppTests", dependencies: ["TmuxerApp"])
     ]
 )
