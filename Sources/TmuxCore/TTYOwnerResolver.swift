@@ -72,15 +72,12 @@ public struct ProcessTableTTYOwnerResolver: TTYOwnerResolver {
 
     /// Executable-basename markers, mirroring `AgentDetector.agentProcessNames`'s discipline:
     /// basename equality against the process's own executable path, not substring containment.
+    /// Delegates the basename-to-app mapping to `TerminalAppCatalog` (ADR-0003) rather than
+    /// switching independently.
     private static func matchTerminalApp(command: String, pid: Int32) -> SupportedTerminalApp? {
         let executablePath = command.split(separator: " ", maxSplits: 1).first.map(String.init) ?? command
         let basename = (executablePath as NSString).lastPathComponent.lowercased()
-        switch basename {
-        case "ghostty": return .ghostty(pid: pid)
-        case "iterm2": return .iTerm2(pid: pid)
-        case "terminal": return .terminalApp(pid: pid)
-        default: return nil
-        }
+        return TerminalAppCatalog.match(basename: basename)?.makeApp(pid)
     }
 
     /// `list-clients`/`ClientInfo.tty` carries tmux's `/dev/ttysNNN` form; `ps -o tty=` reports

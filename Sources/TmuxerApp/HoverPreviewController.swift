@@ -475,16 +475,17 @@ final class HoverPreviewController: NSResponder {
     /// three supported apps that opens via a plain process launch with zero Automation-
     /// permission cost. That default silently no-ops on a machine without Ghostty installed
     /// (whole-branch review finding). Falls back to Terminal.app, which ships on every Mac, in
-    /// that case. `.iTerm2`/`.terminalApp` preferences are left untouched — those are only ever
-    /// set from an app `TTYOwnerResolver` already found running, so no availability check is
-    /// needed for them.
+    /// that case — `TerminalAppCatalog.defaultOpenNewApp` (ADR-0003) owns that fallback logic;
+    /// this method supplies the AppKit-backed availability check `TmuxCore` can't perform
+    /// itself (CLAUDE.md: "TmuxCore must stay free of AppKit"). `.iTerm2`/`.terminalApp`
+    /// preferences are left untouched — those are only ever set from an app `TTYOwnerResolver`
+    /// already found running, so no availability check is needed for them.
     nonisolated private static func resolveOpenNewPreferredApp(_ preferredApp: SupportedTerminalApp?) -> SupportedTerminalApp? {
         switch preferredApp {
         case .none, .ghostty:
-            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil {
-                return preferredApp
+            return TerminalAppCatalog.defaultOpenNewApp {
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: ghosttyBundleID) != nil
             }
-            return .terminalApp(pid: -1)
         case .iTerm2, .terminalApp:
             return preferredApp
         }
