@@ -63,6 +63,12 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         self.tmuxPath = tmuxPath
         super.init()
         terminalView.processDelegate = self
+        // SwiftTerm's own `Terminal.silentLog` defaults to false in DEBUG builds, so its
+        // internal parser `print()`s an "Info: Unhandled DEC Private Mode ..." line to stdout
+        // for every escape sequence it doesn't implement (e.g. shell-integration codes like
+        // 2031/7727) — harmless, but floods the log on every hover once real pane output with
+        // those sequences arrives.
+        terminalView.terminal.silentLog = true
         // Same bug class TASK-014's review caught on `NSTrackingArea.owner` (also `weak`):
         // without this wiring surviving past init, `processTerminated` would never reach a
         // live delegate and acceptance items 4/5 would be silently dead despite a green build.
