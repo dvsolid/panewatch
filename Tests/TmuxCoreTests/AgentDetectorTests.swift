@@ -138,6 +138,13 @@ private func classify(
         #expect(AgentType.pi.badge == .text("π"))
     }
 
+    /// Codex's badge is the SF Symbol `chevron.left.forwardslash.chevron.right`, matching the
+    /// SF Symbol treatment Claude Code already got (TASK-010) rather than SPEC.md's stale `🤖`
+    /// emoji sketch, which predates the `BadgeGlyph` redesign.
+    @Test func codexBadgeIsCodeSFSymbol() throws {
+        #expect(AgentType.codex.badge == .symbol(name: "chevron.left.forwardslash.chevron.right"))
+    }
+
     /// Acceptance item 5: two sessions in the same session group (`wgt`/`wgt-2`) that share a
     /// window produce exactly one Tile for the shared pane (`%51`), not two, deduped on
     /// `pane_id` per SPEC §2.1 — never on `session:window.pane`, which would see two distinct
@@ -189,6 +196,19 @@ private func classify(
         #expect(tile.type == .claudeCode)
         // No `✳ `-prefixed title existed to derive this from (AgentPane's `matchedTitle` guard).
         #expect(tile.taskText == nil)
+    }
+
+    /// Codex has no title-pattern signal (no observed `pane_title` marker), so it can only ever
+    /// be found via the descendant-process fallback — this pins the real argv basename
+    /// (`codex`, bare, no arguments) confirmed against a live Codex process. `%45` (empty title,
+    /// `zsh`) is otherwise unused for a positive fallback match in this file.
+    @Test func paneWithCodexProcessInDescendantsIsClassifiedDespiteNoDistinguishingTitle() throws {
+        let inspector = FakeDescendantProcessInspector(argvByPID: [32244: ["codex"]])
+
+        let panes = try classify(capturedPaneListFixture, descendantInspector: inspector)
+
+        let tile = try #require(panes.first { $0.id == "%45" })
+        #expect(tile.type == .codex)
     }
 
     /// Acceptance item 2: a pane with no distinguishing title and no agent process anywhere in

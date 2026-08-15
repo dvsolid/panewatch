@@ -1,20 +1,22 @@
 import Foundation
 
 /// The coding agent a Tile represents, and the badge glyph shown for it (feature spec §
-/// Solution). Codex has no title-pattern signal — its detection depends entirely on the
-/// descendant-process fallback (SPEC §2 ladder step 2) — but SPEC gives no observed Codex argv
-/// pattern to match on (unlike Pi/Claude Code, which SPEC's Technical Findings captured from a
-/// live server), so it still has no case here: adding one now would be an invented marker with
-/// no evidence behind it, the exact failure mode SPEC warns against for the Claude Code
-/// version-string signal. Add it when a real Codex argv pattern is known.
+/// Solution). Codex has no title-pattern signal — tmux never observed setting a
+/// distinguishing `pane_title` for it — so its detection depends entirely on the
+/// descendant-process fallback (SPEC §2 ladder step 2). Confirmed against a live Codex
+/// process: its argv basename is exactly `codex` (bare, no arguments), the same
+/// bare-executable-name shape already relied on for Pi/Claude Code, so it's added as
+/// ladder step 2's third marker.
 public enum AgentType: Sendable, Equatable {
     case pi
     case claudeCode
+    case codex
 
     public var badge: BadgeGlyph {
         switch self {
         case .pi: return .text("π")
         case .claudeCode: return .symbol(name: "sparkle")
+        case .codex: return .symbol(name: "chevron.left.forwardslash.chevron.right")
         }
     }
 }
@@ -210,6 +212,7 @@ public struct AgentDetector: Sendable {
     private static let agentProcessNames: [String: AgentType] = [
         "claude": .claudeCode,
         "pi": .pi,
+        "codex": .codex,
     ]
 
     private static func matchAgentType(argv: [String]) -> AgentType? {
