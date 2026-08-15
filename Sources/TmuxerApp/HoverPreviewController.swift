@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import TmuxCore
 
 /// Owns the Hover Preview Popup's whole lifecycle (feature spec § Architecture) — hover
@@ -55,14 +56,59 @@ final class HoverPreviewController: NSResponder {
     /// since `FloatingPanel.render(_:)`'s rebuild path always hands in a fresh `TileCardView`.
     private var proxies: [String: TileHoverProxy] = [:]
 
-    /// Wires hover tracking onto one Tile's view. `FloatingPanel.render(_:)` calls this for
-    /// every freshly created `TileCardView` on its rebuild path — that path always makes new
-    /// views, so there's no explicit detach step for the view/tracking-area side: the old
-    /// tracking areas go away with the old views they're attached to. The proxy itself is kept
-    /// alive via `proxies` (see above) until this pane is pruned or superseded.
+    /// TASK-020's Switch wiring: every `TmuxCore` module the double-click path resolves
+    /// through, in order — `paneDiscovery`/`clientDiscovery` share `gateway` with the
+    /// resolvers below purely for construction convenience (each `scan()` is a fresh
+    /// process spawn regardless). All `Sendable`, so `tileDoubleClicked(paneID:)` can hand
+    /// them straight to `Task.detached` without hopping back through `self`.
+    private let gateway: any TmuxGateway
+    private let tmuxPath: String
+    private let paneDiscovery: PaneDiscovery
+    private let clientDiscovery: ClientDiscovery
+    private let ttyOwnerResolver: any TTYOwnerResolver
+    private let switchPlanner: SwitchActionPlanner
+    private let scriptRunner: any AppleScriptRunner
+
+    init(
+        gateway: any TmuxGateway = ProcessTmuxGateway(),
+        tmuxPath: String = TmuxCore.defaultTmuxPath,
+        ttyOwnerResolver: any TTYOwnerResolver = ProcessTableTTYOwnerResolver(),
+        switchPlanner: SwitchActionPlanner = SwitchActionPlanner(),
+        scriptRunner: any AppleScriptRunner = OSAScriptRunner()
+    ) {
+        self.gateway = gateway
+        self.tmuxPath = tmuxPath
+        self.paneDiscovery = PaneDiscovery(gateway: gateway)
+        self.clientDiscovery = ClientDiscovery(gateway: gateway)
+        self.ttyOwnerResolver = ttyOwnerResolver
+        self.switchPlanner = switchPlanner
+        self.scriptRunner = scriptRunner
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("HoverPreviewController does not support NSCoding")
+    }
+
+    /// Wires hover tracking, plus TASK-020's double-click-to-Switch gesture, onto one Tile's
+    /// view. `FloatingPanel.render(_:)` calls this for every freshly created `TileCardView` on
+    /// its rebuild path — that path always makes new views, so there's no explicit detach step
+    /// for the view/tracking-area/gesture-recognizer side: the old ones go away with the old
+    /// views they're attached to. The proxy itself is kept alive via `proxies` (see above)
+    /// until this pane is pruned or superseded.
+    ///
+    /// `numberOfClicksRequired = 2` makes a single click structurally inert (acceptance item
+    /// 4) — there is no single-click recognizer or `mouseDown` override anywhere on this view
+    /// to fire on the first click alone; the gesture simply never resolves until the second one
+    /// lands.
     func attachHoverTracking(to tileView: NSView, paneID: String) {
         let proxy = TileHoverProxy(paneID: paneID, tileView: tileView, controller: self)
         tileView.addTrackingArea(Self.hoverTrackingArea(owner: proxy))
+
+        let doubleClick = NSClickGestureRecognizer(target: proxy, action: #selector(TileHoverProxy.handleDoubleClick))
+        doubleClick.numberOfClicksRequired = 2
+        tileView.addGestureRecognizer(doubleClick)
+
         proxies[paneID] = proxy
         assert(
             tileView.trackingAreas.contains { $0.owner != nil },
@@ -193,6 +239,161 @@ final class HoverPreviewController: NSResponder {
         previewClient = nil
     }
 
+    /// TASK-020: double-click-to-Switch, wired from every Tile's `TileHoverProxy` gesture
+    /// recognizer (`attachHoverTracking`). Runs `close()` **unconditionally, first, and
+    /// synchronously on the main actor** — before the `Task.detached` below even exists, let
+    /// alone runs — regardless of whether this pane's popup is the one currently open
+    /// (acceptance item 5: "always", not "if this Tile's own popup is open"; also needed for a
+    /// pending dwell timer on some *other* Tile, which `close()`'s own `cancelDwell()` already
+    /// covers).
+    ///
+    /// This ordering isn't cosmetic: if any popup was open when the double-click landed, its
+    /// `PreviewClient` is a real, synchronously-torn-down grouped tmux session and client
+    /// (`PreviewClientLifecycle.teardownGroupSession`, itself a blocking `kill-session`). Left
+    /// running during the resolve below, it poisons both scans this pass is about to do —
+    /// verified live during TASK-015: a hovered pane's `pane_id` appears **twice** in
+    /// `list-panes -a` while its grouped session is attached (once under the source session,
+    /// once under the group), and the group's own tty shows up in `list-clients` with no
+    /// owning app. Either would corrupt `resolveTarget`/`resolveAttachedClient` below in ways
+    /// that only show up when a popup happened to be open first — i.e. the normal case, since
+    /// double-clicking a Tile almost always follows hovering it.
+    ///
+    /// Everything past `close()` is blocking I/O (`list-panes`, `list-clients`, `ps -A`, and —
+    /// on the focus-existing path — `osascript`, which blocks on the OS's own Automation
+    /// permission dialog the first time a given app is scripted) and must never run on the
+    /// main actor, or the whole UI freezes behind it. `performSwitch` is a `nonisolated static`
+    /// function taking only `Sendable` values precisely so `Task.detached` can run it without
+    /// hopping back through `self` at all.
+    fileprivate func tileDoubleClicked(paneID: String) {
+        close()
+
+        let gateway = gateway
+        let tmuxPath = tmuxPath
+        let paneDiscovery = paneDiscovery
+        let clientDiscovery = clientDiscovery
+        let ttyOwnerResolver = ttyOwnerResolver
+        let switchPlanner = switchPlanner
+        let scriptRunner = scriptRunner
+
+        Task.detached {
+            Self.performSwitch(
+                paneID: paneID,
+                gateway: gateway,
+                tmuxPath: tmuxPath,
+                paneDiscovery: paneDiscovery,
+                clientDiscovery: clientDiscovery,
+                ttyOwnerResolver: ttyOwnerResolver,
+                switchPlanner: switchPlanner,
+                scriptRunner: scriptRunner
+            )
+        }
+    }
+
+    /// The full SPEC §4 priority-ladder pass for one double-click: resolve the pane's current
+    /// `PaneTarget` and attached-client state fresh (never cached — the Tile list can be stale
+    /// by the time a double-click lands), plan the outcome, then execute it. `nonisolated` and
+    /// free of any reference to `self` so it's safe to run off the main actor from
+    /// `tileDoubleClicked`'s `Task.detached`.
+    nonisolated private static func performSwitch(
+        paneID: String,
+        gateway: any TmuxGateway,
+        tmuxPath: String,
+        paneDiscovery: PaneDiscovery,
+        clientDiscovery: ClientDiscovery,
+        ttyOwnerResolver: any TTYOwnerResolver,
+        switchPlanner: SwitchActionPlanner,
+        scriptRunner: any AppleScriptRunner
+    ) {
+        // The pane can have vanished between the double-click and this resolve (e.g. the agent
+        // exited) — silently do nothing rather than act on stale/absent data, the same posture
+        // `PreviewClientLifecycle.prepareGroupSession` takes for a dead pane.
+        guard let target = resolveTarget(paneID: paneID, paneDiscovery: paneDiscovery) else { return }
+        let attachedClient = resolveAttachedClient(
+            target: target,
+            clientDiscovery: clientDiscovery,
+            ttyOwnerResolver: ttyOwnerResolver
+        )
+
+        switch switchPlanner.plan(target: target, attachedClient: attachedClient) {
+        case .focusExisting(_, let script):
+            // SPEC §4 step 1: retarget the tmux client already attached to this session
+            // *before* the AppleScript runs — `SwitchActionPlanner`'s own doc comment is
+            // explicit that this dispatch is the caller's job, not the planner's. Never
+            // `attach` here (SPEC §4: "attach always creates an additional client").
+            _ = try? gateway.run(SwitchInvocation.selectWindowArguments(target: target))
+            _ = try? gateway.run(SwitchInvocation.selectPaneArguments(target: target))
+            do {
+                _ = try scriptRunner.run(script: script)
+            } catch {
+                // Acceptance item 3: Automation permission denied (or any other run failure)
+                // falls back to opening a new terminal — always via Ghostty (`preferredApp:
+                // nil`), never the app that just failed. **[REQ CHANGE], found live** (this
+                // task's `## Implementation` notes, `task020-probe5`): preferring the failed
+                // app here is silently ineffective for iTerm2/Terminal.app specifically,
+                // because Automation permission is denied per (this process, that app) pair,
+                // not per script — their own "open a new window" mechanism
+                // (`SwitchInvocation.openNewAction`'s `.runScript` branch) is *also*
+                // AppleScript, so it fails for the identical reason and nothing visibly
+                // happens. Ghostty's open-new is a plain process launch with no
+                // Automation-permission dependency at all — the only one of the three immune
+                // to this exact failure mode, which is why it's the unconditional fallback
+                // here even though the owning app is known.
+                performOpenNew(preferredApp: nil, tmuxPath: tmuxPath, paneId: target.paneId, scriptRunner: scriptRunner)
+            }
+        case .openNew(let paneId):
+            performOpenNew(preferredApp: attachedClient?.owningApp, tmuxPath: tmuxPath, paneId: paneId, scriptRunner: scriptRunner)
+        }
+    }
+
+    /// Finds the `RawPane` matching `paneID` in a fresh `PaneDiscovery.scan()` and builds its
+    /// `PaneTarget` — this task's notes are explicit that this lookup gets no dedicated
+    /// `TmuxCore` module of its own, just a filter over an existing scan at double-click time.
+    nonisolated private static func resolveTarget(paneID: String, paneDiscovery: PaneDiscovery) -> PaneTarget? {
+        guard let panes = try? paneDiscovery.scan(), let pane = panes.first(where: { $0.paneId == paneID }) else {
+            return nil
+        }
+        return PaneTarget(paneId: pane.paneId, sessionName: pane.sessionName, windowIndex: pane.windowIndex, paneIndex: pane.paneIndex)
+    }
+
+    /// Matches a fresh `ClientDiscovery.scan()` by **session name**, not "the only client" or
+    /// tty proximity — the session is the one thing `PaneTarget` and `ClientInfo` both carry,
+    /// and matching on it is also what keeps this correct if `close()` above ever stops being
+    /// perfectly synchronous with tmux's own state (belt-and-suspenders alongside the ordering
+    /// documented on `tileDoubleClicked`).
+    nonisolated private static func resolveAttachedClient(
+        target: PaneTarget,
+        clientDiscovery: ClientDiscovery,
+        ttyOwnerResolver: any TTYOwnerResolver
+    ) -> AttachedClient? {
+        guard let clients = try? clientDiscovery.scan(), let client = clients.first(where: { $0.sessionName == target.sessionName }) else {
+            return nil
+        }
+        return AttachedClient(tty: client.tty, owningApp: ttyOwnerResolver.resolveOwningApp(tty: client.tty))
+    }
+
+    /// SPEC §4 path 2, "open a new terminal attached to the pane" — dispatches
+    /// `SwitchInvocation.openNewAction`'s two possible mechanisms. Best-effort: a failure here
+    /// (the fallback of the fallback) has nowhere further to go per this task's acceptance
+    /// criteria, so it's swallowed the same way `PreviewClientLifecycle`'s best-effort cleanup
+    /// steps are — SPEC §4's own priority ladder ends at "open new," with only a tooltip
+    /// fallback beyond it, which is out of this task's scope (see `SwitchAction`'s doc comment).
+    nonisolated private static func performOpenNew(
+        preferredApp: SupportedTerminalApp?,
+        tmuxPath: String,
+        paneId: String,
+        scriptRunner: any AppleScriptRunner
+    ) {
+        switch SwitchInvocation.openNewAction(preferredApp: preferredApp, tmuxPath: tmuxPath, paneId: paneId) {
+        case .launchProcess(let executable, let arguments):
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            try? process.run()
+        case .runScript(let script):
+            _ = try? scriptRunner.run(script: script)
+        }
+    }
+
     private func cancelDwell() {
         dwellTimer?.invalidate()
         dwellTimer = nil
@@ -272,6 +473,13 @@ private final class TileHoverProxy: NSResponder {
 
     override func mouseExited(with event: NSEvent) {
         controller?.tileMouseExited(paneID: paneID)
+    }
+
+    /// TASK-020: the `NSClickGestureRecognizer` target-action `attachHoverTracking` wires onto
+    /// this Tile's view — `@objc` since gesture-recognizer target-action dispatch goes through
+    /// the Objective-C runtime, same requirement `#selector` always has.
+    @objc func handleDoubleClick() {
+        controller?.tileDoubleClicked(paneID: paneID)
     }
 }
 
