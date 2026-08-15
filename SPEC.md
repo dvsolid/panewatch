@@ -86,13 +86,17 @@ This is the reverse of the intuitive ordering, and it is what the live data show
 
 Any rule keyed on `cmd=node` misses most real Pi panes. **What distinguishes the `zsh` cases from the `node` cases is not established** — plausibly how Pi was launched (direct exec vs. wrapper script vs. resumed job), but this was not tested. `%54` and `%58` run the same agent as `%29` and `%14` yet report `node`, so the field is inconsistent even within one agent type. Treat the *observation* as reliable and the *cause* as unknown; that alone is sufficient reason not to depend on the field.
 
-**Detection ladder (first match wins):**
+**Detection ladder:**
 
-1. **Title pattern** — cheap, comes free with the `list-panes` format string, no extra process spawn.
+1. **Title pattern** — cheap, comes free with the `list-panes` format string, no extra process spawn. **Not final on its own**: tmux's `pane_title` is sticky and outlives the process that set it, so a title match is corroborated every discovery pass against a live descendant of `pane_pid` (step 2's walk, uncached — see below) before it's trusted. A title match with no corroborating descendant this pass is demoted, not kept.
    - Pi: title starts with `π` (typically `π - <project>`)
    - Claude Code: title starts with `✳ ` (the task indicator)
-2. **Descendant process inspection** — the robust fallback. Walk children of `pane_pid` and match on argv. This is the only method that survives both the shell-wrapping problem above and Claude Code version bumps.
+2. **Descendant process inspection** — the robust fallback, and also step 1's corroboration check. Walk children of `pane_pid` and match on argv. This is the only method that survives both the shell-wrapping problem above and Claude Code version bumps.
 3. **`pane_current_command`** — corroborating evidence only, never the sole basis for a positive ID.
+
+If the descendant-process walk itself fails to run this pass (e.g. the `ps` snapshot spawn errors or exits non-zero), the ladder fails open: an existing title match is kept rather than demoted, and an uncached fallback-eligible pane is left unresolved to retry next pass rather than permanently cached as "no agent." A walk that runs successfully and finds nothing is not the same as a walk that didn't run — see `DescendantProcessInspector`'s doc comment for how the two are told apart.
+
+**Known limitation, not yet observed live:** an agent running over `ssh`/`docker exec`/inside a devcontainer sets `pane_title` via an OSC escape sequence that passes through the transport, but has no local descendant process — the agent's own process tree lives on the remote/container side, invisible to a local `ps -A`. Since step 1 is no longer final on its own, such a pane would now be silently demoted (title matched, corroboration found nothing locally) even though the agent is genuinely running. No live pane has exhibited this yet; flagged here as a gap in the corroboration design, not something fixed.
 
 **Do not match Claude Code on `pane_current_command` matching `2.1.XXX`.** That string is the versioned binary name and changes on every Claude Code release; a rule built on it ships a patch per upstream update. Use it to *confirm* a title match, never to drive one.
 
@@ -106,7 +110,7 @@ Any rule keyed on `cmd=node` misses most real Pi panes. **What distinguishes the
 - Format string should include at minimum:
   `#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}`
 - Re-scan every `discoveryInterval` (30s) and reconcile against cached state by `pane_id`.
-- Descendant-process inspection (ladder step 2) is the only expensive step; run it once per newly-seen `pane_id` and cache the result for the pane's lifetime.
+- Descendant-process inspection (ladder step 2) is the only expensive step. This caching applies only to its use as the ladder step 3 *fallback* (a title-less or excluded pane, resolved once and memoized): run it once per newly-seen `pane_id` and cache the result for the pane's lifetime. Its use as ladder step 1's *corroboration* check is deliberately **not** cached — a title match is re-walked every discovery pass, since the question there ("is the agent that set this title still alive") can change pass to pass even though the pane's identity doesn't. Both uses still batch into the same single `ps -A` spawn per discovery pass (one process-table snapshot serves every pid needing a walk that pass, regardless of which ladder step asked).
 
 ### 2.1 Session groups — deduplicate on `pane_id`
 

@@ -35,10 +35,24 @@ public protocol DescendantProcessInspector: Sendable {
 /// already-classified agent is still alive, not whether a shell wraps one. Either way, every pid
 /// needing a walk this pass — cached-fallback-eligible or not — batches into one call.
 public struct ProcessTableDescendantInspector: DescendantProcessInspector {
-    public init() {}
+    private let psExecutableURL: URL
+
+    public init() {
+        self.init(psExecutableURL: URL(fileURLWithPath: "/bin/ps"))
+    }
+
+    /// Test seam: point at a fake `ps`-shaped executable instead of the real `/bin/ps` — same
+    /// pattern as `ProcessTmuxGateway.tmuxPath` (CLAUDE.md: "shell out through an injectable
+    /// command runner so the real binary can be faked"). Lets tests exercise the non-zero-exit
+    /// and empty-output failure paths in `snapshotProcessTable()` without depending on `/bin/ps`
+    /// itself ever failing.
+    init(psExecutableURL: URL) {
+        self.psExecutableURL = psExecutableURL
+    }
 
     public func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
-        guard !pids.isEmpty, let table = try? Self.snapshotProcessTable() else { return [:] }
+        guard !pids.isEmpty else { return [:] }
+        guard let table = try? Self.snapshotProcessTable(psExecutableURL: psExecutableURL), !table.isEmpty else { return [:] }
 
         var childrenByParent: [Int32: [Int32]] = [:]
         var commandByPID: [Int32: String] = [:]
@@ -68,17 +82,30 @@ public struct ProcessTableDescendantInspector: DescendantProcessInspector {
         let command: String
     }
 
+    struct SnapshotFailed: Error {
+        let terminationStatus: Int32
+    }
+
     /// Parses `ps -A -o pid=,ppid=,command=` output: three whitespace-separated fields per
     /// line, `command` potentially containing further whitespace (hence `maxSplits: 2`).
-    private static func snapshotProcessTable() throws -> [ProcessEntry] {
+    ///
+    /// Throws on a non-zero exit rather than trusting whatever landed on stdout: a spawn that
+    /// runs but is killed, denied by the sandbox/seatbelt, or otherwise fails partway through
+    /// can still leave parsable-but-wrong output on the pipe. Checking `terminationStatus` is
+    /// what lets `descendantArgv(of:)` distinguish "the walk ran and found nothing" from "the
+    /// walk didn't really run" — see this file's `DescendantProcessInspector` doc comment.
+    private static func snapshotProcessTable(psExecutableURL: URL) throws -> [ProcessEntry] {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.executableURL = psExecutableURL
         process.arguments = ["-A", "-o", "pid=,ppid=,command="]
         let pipe = Pipe()
         process.standardOutput = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw SnapshotFailed(terminationStatus: process.terminationStatus)
+        }
         let output = String(data: data, encoding: .utf8) ?? ""
         return output.split(separator: "\n").compactMap { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
