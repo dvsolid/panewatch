@@ -91,7 +91,11 @@ private final class FakeFailableActivitySource: FailableActivitySource, @uncheck
 
         #expect(secondary.lastWatchedPanes == ["%2": "sess"])
         #expect(secondary.setWatchedPanesCallCount == 2) // replay + the one subsequent call
-        #expect(primary.setWatchedPanesCallCount == 1) // no longer receiving calls post-failure
+        // Post-switch, `primary` gets exactly one more call: the teardown to an empty pane map
+        // (never real traffic again) — proving the abandoned primary is told to stop watching,
+        // not just that it stops receiving new watch requests.
+        #expect(primary.setWatchedPanesCallCount == 2)
+        #expect(primary.lastWatchedPanes == [:])
         #expect(firedPaneIds == ["%2"])
     }
 

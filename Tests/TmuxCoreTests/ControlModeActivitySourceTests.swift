@@ -8,8 +8,19 @@ import Testing
 /// `PollingActivitySourceTests.FakeTmuxGateway`'s role for `PollingActivitySource`.
 private final class FakeControlModeProcess: ControlModeProcess, @unchecked Sendable {
     var onLine: ((String) -> Void)?
-    var onTerminate: (() -> Void)?
+    /// When `terminatesAsSoonAsAssigned` is set, assigning `onTerminate` fires it immediately —
+    /// mirroring `LiveControlModeProcess`'s synchronous replay for a process that already
+    /// terminated before its caller wired a handler (the real-world shape
+    /// `ControlModeActivitySourceTests.spawnClientRegistersBeforeWiringHandlers...` exercises).
+    var onTerminate: (() -> Void)? {
+        didSet {
+            if terminatesAsSoonAsAssigned {
+                onTerminate?()
+            }
+        }
+    }
     private(set) var terminateCallCount = 0
+    var terminatesAsSoonAsAssigned = false
 
     /// Fires `onTerminate`, mirroring `LiveControlModeProcess`: its doc comment guarantees
     /// `onTerminate` fires on *any* exit, deliberate or not, so the caller-initiated path (a
@@ -88,6 +99,7 @@ private final class FakeControlModeProcessLauncher: ControlModeProcessLauncher, 
     private var processesByTarget: [String: FakeControlModeProcess] = [:]
     private var launchCounts: [String: Int] = [:]
     private var failingTargets: Set<String> = []
+    private var preTerminatingTargets: Set<String> = []
     private let lock = NSLock()
 
     func launch(tmuxPath: String, target: String) throws -> any ControlModeProcess {
@@ -98,6 +110,9 @@ private final class FakeControlModeProcessLauncher: ControlModeProcessLauncher, 
             throw LaunchFailure.simulated
         }
         let process = FakeControlModeProcess()
+        if preTerminatingTargets.remove(target) != nil {
+            process.terminatesAsSoonAsAssigned = true
+        }
         processesByTarget[target] = process
         return process
     }
@@ -113,6 +128,15 @@ private final class FakeControlModeProcessLauncher: ControlModeProcessLauncher, 
         } else {
             failingTargets.remove(target)
         }
+    }
+
+    /// Test-only: makes the *next* process launched for `target` fire `onTerminate` the instant
+    /// it's assigned a handler — simulating a process that already terminated before its caller
+    /// wired `onTerminate`, the race `LiveControlModeProcess`'s setter-replay (ADR-0005) closes.
+    func terminateNextProcessAsSoonAsHandlerAssigned(for target: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        preTerminatingTargets.insert(target)
     }
 
     func launchCount(for target: String) -> Int {
@@ -392,6 +416,34 @@ private final class FakeClock: @unchecked Sendable {
         #expect(launcher.launchCount(for: "agents") == 1)
     }
 
+    // MARK: - Branch-fix regression: spawnClient registers before wiring handlers
+
+    /// A process that terminates the instant its `onTerminate` handler is assigned (the shape a
+    /// real `LiveControlModeProcess` produces when the underlying process already exited before
+    /// `spawnClient` got around to wiring handlers, ADR-0005) must still be recognized by
+    /// `handleTerminate` as *this session's* live client — not silently dropped because
+    /// `clientsBySession` hadn't been updated yet at the moment the replay fired. Falsifiable
+    /// against "wire handlers, then register in the pool" (the old ordering): under that
+    /// ordering, `handleTerminate`'s identity guard (`clientsBySession[session] === process`)
+    /// finds no entry at all when the replay fires mid-assignment, treats it as an already-reaped
+    /// session, and schedules nothing — this session goes dark with no reconnect attempt ever
+    /// made.
+    @Test func spawnClientRegistersInPoolBeforeWiringHandlersSoAnImmediateReplayIsStillReconnected() {
+        let launcher = FakeControlModeProcessLauncher()
+        let scheduler = FakeScheduler()
+        launcher.terminateNextProcessAsSoonAsHandlerAssigned(for: "agents")
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", scheduler: scheduler
+        )
+        var failureFired = false
+        source.onFailure = { failureFired = true }
+
+        source.setWatchedPanes(["%1": "agents"])
+
+        #expect(failureFired) // unconfirmed termination, never-confirmed adapter
+        #expect(scheduler.pendingCount == 1) // a reconnect was actually scheduled, not dropped
+    }
+
     // MARK: - TASK-029: the concrete FailableActivitySource signal
 
     /// The literal example the Slice names: `ControlModeProcessLauncher.launch` throwing at
@@ -477,4 +529,46 @@ private final class FakeClock: @unchecked Sendable {
 
         #expect(scheduler.pendingDelays == [0])
     }
+
+    // MARK: - Branch-fix regression: an abandoned primary stops respawning after FallbackActivitySource switches
+
+    /// End-to-end through the real `FallbackActivitySource` composition (not a fake standing in
+    /// for `ControlModeActivitySource`): the unconfirmed-termination shape is this feature's
+    /// primary motivating case (old tmux where control mode misbehaves), and it's the shape that
+    /// loops — `spawnClient` succeeds, the process dies unconfirmed, `onFailure` fires and
+    /// switches to `secondary`, but without `FallbackActivitySource` telling `primary` to stop,
+    /// `primary`'s own TASK-027 supervision keeps rescheduling a reconnect against a session
+    /// `secondary` is now the only one reporting on. Falsifiable against the pre-fix
+    /// `switchToSecondary` (no `primary.setWatchedPanes([:])` call): draining the scheduler there
+    /// respawns "agents" once per drain forever — `launchCount` climbs and a new retry is always
+    /// pending. Bounded to 5 drains rather than looped to exhaustion, per CLAUDE.md's ban on
+    /// tests that can hang under the very bug they're checking for.
+    @Test func fallbackSwitchStopsPrimaryFromRespawningOnUnconfirmedTermination() {
+        let launcher = FakeControlModeProcessLauncher()
+        let scheduler = FakeScheduler()
+        let primary = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", scheduler: scheduler
+        )
+        let secondary = RecordingActivitySource()
+        let fallback = FallbackActivitySource(primary: primary, secondary: secondary)
+
+        fallback.setWatchedPanes(["%1": "agents"])
+        // Never emits %end or %output — the attach itself never confirmed before dying. This is
+        // what fires `onFailure` and trips the switch.
+        launcher.process(for: "agents")!.simulateTermination()
+
+        for _ in 0..<5 { scheduler.fireNext() }
+
+        #expect(launcher.launchCount(for: "agents") == 1) // no reconnect ever attempted post-switch
+        #expect(scheduler.pendingCount == 0) // nothing left pacing a future respawn either
+    }
+}
+
+/// Minimal `ActivitySource` fake for the `FallbackActivitySource` integration test above — this
+/// file already has `FakeControlModeProcess`/`FakeControlModeProcessLauncher`/`FakeScheduler` for
+/// standing in as the real `ControlModeActivitySource`'s dependencies, so `secondary` only needs
+/// to exist, not do anything observable.
+private final class RecordingActivitySource: ActivitySource, @unchecked Sendable {
+    var onOutput: ((String, Date) -> Void)?
+    func setWatchedPanes(_ panes: [String: String]) {}
 }

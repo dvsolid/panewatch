@@ -106,8 +106,19 @@ final class ControlModeLineReader: @unchecked Sendable {
 /// The concrete `ControlModeProcess` behind `ProcessControlModeLauncher`. `@unchecked Sendable`
 /// like `PollingActivitySource`: `Process.terminationHandler` fires on a system-owned thread
 /// while `onLine`/`onTerminate`/`terminate()` may be called from another task, so all mutable
-/// stored state (`lineHandler`, `terminateHandler`, `didTerminate`) is read and written
-/// exclusively under `lock`.
+/// stored state (`lineHandler`, `terminateHandler`, `didTerminate`, `pendingLines`) is read and
+/// written exclusively under `lock`.
+///
+/// `init` sets `process.terminationHandler` (and starts the line reader) before the caller
+/// starts the process, closing the race TASK-025 built this ordering for — but that only
+/// guards this class's own internal delivery path. The *caller* (`ControlModeActivitySource`)
+/// still assigns `onLine`/`onTerminate` after getting this instance back from `launch`, which
+/// reopens the same shape of race one level up: the process can legitimately terminate (or emit
+/// lines) before those setters ever run. `onLine`/`onTerminate` below close that window by
+/// buffering (lines) or latching (termination) whatever happened before a handler was set, and
+/// replaying it synchronously the moment the setter assigns a non-nil handler — so a caller that
+/// assigns the setter late still sees every line and exactly one termination, in order, instead
+/// of silently losing whatever happened first.
 final class LiveControlModeProcess: ControlModeProcess, @unchecked Sendable {
     private let process: Process
     private let stdinPipe: Pipe // held alive, never written to, never closed — see `launch`.
@@ -116,15 +127,36 @@ final class LiveControlModeProcess: ControlModeProcess, @unchecked Sendable {
     private var lineHandler: ((String) -> Void)?
     private var terminateHandler: (() -> Void)?
     private var didTerminate = false
+    /// Lines that arrived while `lineHandler` was nil, held in order until `onLine` is next
+    /// assigned a non-nil handler, at which point they're replayed and the buffer is cleared.
+    private var pendingLines: [String] = []
 
     var onLine: ((String) -> Void)? {
         get { lock.lock(); defer { lock.unlock() }; return lineHandler }
-        set { lock.lock(); defer { lock.unlock() }; lineHandler = newValue }
+        set {
+            lock.lock()
+            lineHandler = newValue
+            let buffered = pendingLines
+            pendingLines.removeAll()
+            lock.unlock()
+            guard let newValue else { return }
+            for line in buffered {
+                newValue(line)
+            }
+        }
     }
 
     var onTerminate: (() -> Void)? {
         get { lock.lock(); defer { lock.unlock() }; return terminateHandler }
-        set { lock.lock(); defer { lock.unlock() }; terminateHandler = newValue }
+        set {
+            lock.lock()
+            terminateHandler = newValue
+            let alreadyTerminated = didTerminate
+            lock.unlock()
+            if alreadyTerminated {
+                newValue?()
+            }
+        }
     }
 
     init(process: Process, stdinPipe: Pipe, stdoutHandle: FileHandle) {
@@ -133,7 +165,7 @@ final class LiveControlModeProcess: ControlModeProcess, @unchecked Sendable {
         self.lineReader = ControlModeLineReader(handle: stdoutHandle)
 
         lineReader.onLine = { [weak self] line in
-            self?.onLine?(line)
+            self?.deliverLine(line)
         }
 
         // Set before the caller starts the process (`launch` calls `process.run()` right after
@@ -141,6 +173,17 @@ final class LiveControlModeProcess: ControlModeProcess, @unchecked Sendable {
         // assignment and be missed.
         process.terminationHandler = { [weak self] _ in
             self?.fireTerminate()
+        }
+    }
+
+    private func deliverLine(_ line: String) {
+        lock.lock()
+        if let handler = lineHandler {
+            lock.unlock()
+            handler(line)
+        } else {
+            pendingLines.append(line)
+            lock.unlock()
         }
     }
 

@@ -89,6 +89,15 @@ public final class FallbackActivitySource: ActivitySource, @unchecked Sendable {
     /// `secondary.setWatchedPanes` must never run while `lock` is held, since `onFailure` may arrive
     /// on a foreign thread mid-call, mirroring `ControlModeActivitySource.setWatchedPanes`'s same
     /// convention.
+    ///
+    /// Also tells `primary` to stop watching everything (`setWatchedPanes([:])`), outside the
+    /// lock for the same reason. Without this, an abandoned `ControlModeActivitySource` primary
+    /// keeps `wantedSessions` frozen at its last pre-switch value: every post-switch call routes
+    /// to `secondary` only (`setWatchedPanes` above), so nothing ever tells `primary` its watched
+    /// set shrank, and its own supervision (TASK-027's reconnect-on-termination) keeps respawning
+    /// real `tmux -C attach` subprocesses against sessions this source no longer reports on,
+    /// forever. Reaping via an empty pane map reuses `primary`'s own teardown path — no new
+    /// `ActivitySource` member needed.
     private func switchToSecondary() {
         lock.lock()
         guard !usingSecondary else {
@@ -100,5 +109,6 @@ public final class FallbackActivitySource: ActivitySource, @unchecked Sendable {
         lock.unlock()
 
         secondary.setWatchedPanes(panes)
+        primary.setWatchedPanes([:])
     }
 }

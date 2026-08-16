@@ -120,6 +120,16 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
         self.reconnectMaxDelay = reconnectMaxDelay
     }
 
+    deinit {
+        // Mirrors `PollingActivitySource.deinit`: a deallocated source can no longer be reaped
+        // via `setWatchedPanes([:])` by a caller (e.g. `FallbackActivitySource` after it
+        // switches away), so terminate whatever's still pooled here directly rather than leaving
+        // real `tmux -C attach` subprocesses attached with nothing left to stop them.
+        for process in clientsBySession.values {
+            process.terminate()
+        }
+    }
+
     /// Diffs the wanted session set (derived from `panes`' values, ADR-0004) against the pool's
     /// current session set: spawns one Control Client for each newly-watched session, reaps
     /// (terminates) each session that no longer has any watched pane. A session with ≥1 watched
@@ -174,21 +184,35 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
     /// for the next `attemptReconnect` pass (or, for the initial `setWatchedPanes` spawn, is
     /// picked up the next time any client's termination triggers a reconcile) — except for
     /// reporting `onFailure` (TASK-029) when this adapter has never confirmed any attach yet.
+    ///
+    /// Registers `process` in `clientsBySession` *before* wiring its handlers, not after. Both
+    /// `LiveControlModeProcess.onLine`/`onTerminate` (ADR-0005) replay synchronously, inline in
+    /// the setter, if a line or termination already happened before the setter ran — but
+    /// `handleTerminate`'s reap guard (`clientsBySession[session] === process`) needs the
+    /// dictionary entry to already exist for that synchronous replay to be recognized as "this
+    /// session's live client," not mistaken for an already-reaped session. Registering first
+    /// closes that window instead of merely narrowing it.
+    ///
+    /// `onLine` is wired before `onTerminate`, and that order matters: if termination replayed
+    /// first, `handleTerminate` would remove `session` from `clientsBySession` before a
+    /// same-instant buffered `%end` line's replay ran `confirmAttach`, which would insert a
+    /// process that's already gone into `confirmedProcessIDs` with nothing left to ever remove
+    /// it — the exact stale-identity hazard `setWatchedPanes`' reap path guards against.
     @discardableResult
     private func spawnClient(for session: String) -> Bool {
         guard let process = try? launcher.launch(tmuxPath: tmuxPath, target: session) else {
             reportFailureIfNeverConfirmed()
             return false
         }
+        lock.lock()
+        clientsBySession[session] = process
+        lock.unlock()
         process.onLine = { [weak self] line in
             self?.handle(line: line, process: process)
         }
         process.onTerminate = { [weak self] in
             self?.handleTerminate(session: session, process: process)
         }
-        lock.lock()
-        clientsBySession[session] = process
-        lock.unlock()
         return true
     }
 

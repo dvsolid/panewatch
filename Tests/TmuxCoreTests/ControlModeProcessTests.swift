@@ -182,6 +182,73 @@ import Testing
         lock.unlock()
     }
 
+    /// Branch-fix regression (ADR-0005): the caller (`ControlModeActivitySource.spawnClient`)
+    /// assigns `onTerminate` *after* `launch()` returns, which is after `process.run()` already
+    /// started the child — so a process that exits immediately can genuinely terminate before
+    /// any caller ever wires a handler. Unlike `onTerminateFiresExactlyOnceOnNaturalExit` above
+    /// (which leaves the two events racing and passes only because assignment happens to win),
+    /// this test forces the ordering deterministically: sleep long enough that the fake tmux has
+    /// certainly already exited and the internal termination handler has already latched
+    /// `didTerminate`, *then* assign `onTerminate`, and assert synchronously (no `waitUntil`)
+    /// that the assignment itself delivers the event. Against the pre-fix setter (a plain stored
+    /// property with no replay), `terminateCount` would stay 0 forever here — this is not a
+    /// timing race that could flip either way, it's a deterministic miss.
+    @Test func onTerminateFiresWhenAssignedAfterProcessAlreadyTerminated() throws {
+        let tmux = try makeFakeTmux(body: "exit 0")
+        let launcher = ProcessControlModeLauncher()
+        let process = try launcher.launch(tmuxPath: tmux.path, target: "agents:1")
+
+        // Deliberately not using onTerminate/waitUntil yet: give the fake tmux (and the
+        // termination-detection machinery) ample time to have already fired internally, with no
+        // handler assigned to observe it, before this test assigns one.
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let lock = NSLock()
+        var terminateCount = 0
+        process.onTerminate = {
+            lock.lock()
+            terminateCount += 1
+            lock.unlock()
+        }
+
+        lock.lock()
+        let countRightAfterAssignment = terminateCount
+        lock.unlock()
+
+        #expect(countRightAfterAssignment == 1)
+    }
+
+    /// Same race, for `onLine`: `ControlModeLineReader` (and now `LiveControlModeProcess`) can
+    /// receive and reassemble a complete line before any caller has assigned `onLine` at all.
+    /// Forces the ordering deterministically (sleep past the fake tmux's write, then assign) and
+    /// asserts synchronously that the assignment itself delivers the buffered line — against the
+    /// pre-fix setter (no buffering; `self?.onLine?(line)` with a nil `onLine` just discards the
+    /// line), this line would be silently lost forever, never delivered even after `onLine` is
+    /// later assigned.
+    @Test func onLineDeliversLinesThatArrivedBeforeHandlerWasAssigned() throws {
+        let tmux = try makeFakeTmux(body: "printf '%%output %%51 hello\\n'\nwhile true; do sleep 60; done")
+        let launcher = ProcessControlModeLauncher()
+        let process = try launcher.launch(tmuxPath: tmux.path, target: "agents:1")
+
+        // Give the fake tmux time to write and flush its line before this test assigns onLine.
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let lock = NSLock()
+        var lines: [String] = []
+        process.onLine = { line in
+            lock.lock()
+            lines.append(line)
+            lock.unlock()
+        }
+        process.terminate()
+
+        lock.lock()
+        let linesRightAfterAssignment = lines
+        lock.unlock()
+
+        #expect(linesRightAfterAssignment == ["%output %51 hello"])
+    }
+
     // MARK: - Acceptance item 5: terminate() ends a running process
 
     @Test func terminateEndsARunningProcess() throws {
