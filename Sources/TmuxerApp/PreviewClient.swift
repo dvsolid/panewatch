@@ -94,6 +94,12 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         terminalView.terminal.silentLog = true
         // See `makeTerminalFont()`'s doc comment for the font choice and fallback.
         terminalView.font = Self.makeTerminalFont()
+        // SwiftTerm's own default background is pure black — on user request, a notch lighter
+        // so the preview reads as a terminal sitting on the popup's `hudWindow` material rather
+        // than a flat black cutout. `nativeBackgroundColor`, not the popup's own material/layer:
+        // `LocalProcessTerminalView` paints its own opaque background every frame, over
+        // whatever sits behind it in the view hierarchy.
+        terminalView.nativeBackgroundColor = NSColor(calibratedRed: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
         // Same bug class TASK-014's review caught on `NSTrackingArea.owner` (also `weak`):
         // without this wiring surviving past init, `processTerminated` would never reach a
         // live delegate and acceptance items 4/5 would be silently dead despite a green build.
