@@ -187,21 +187,24 @@ import Testing
     /// started the child — so a process that exits immediately can genuinely terminate before
     /// any caller ever wires a handler. Unlike `onTerminateFiresExactlyOnceOnNaturalExit` above
     /// (which leaves the two events racing and passes only because assignment happens to win),
-    /// this test forces the ordering deterministically: sleep long enough that the fake tmux has
-    /// certainly already exited and the internal termination handler has already latched
-    /// `didTerminate`, *then* assign `onTerminate`, and assert synchronously (no `waitUntil`)
-    /// that the assignment itself delivers the event. Against the pre-fix setter (a plain stored
-    /// property with no replay), `terminateCount` would stay 0 forever here — this is not a
-    /// timing race that could flip either way, it's a deterministic miss.
+    /// this test forces the ordering deterministically: poll the internal `didTerminate` latch
+    /// (via `hasTerminatedForTesting`, not the handler-delivery path) until the fake tmux has
+    /// certainly already exited, *then* assign `onTerminate`, and assert synchronously (no
+    /// `waitUntil`) that the assignment itself delivers the event. Polling — rather than a fixed
+    /// sleep — keeps this reliable under the full suite's parallel subprocess load (CLAUDE.md:
+    /// "Always pass a timeout... abort hanging tests immediately"). Against the pre-fix setter (a
+    /// plain stored property with no replay), `terminateCount` would stay 0 forever here — this
+    /// is not a timing race that could flip either way, it's a deterministic miss.
     @Test func onTerminateFiresWhenAssignedAfterProcessAlreadyTerminated() throws {
         let tmux = try makeFakeTmux(body: "exit 0")
         let launcher = ProcessControlModeLauncher()
         let process = try launcher.launch(tmuxPath: tmux.path, target: "agents:1")
+        let liveProcess = try #require(process as? LiveControlModeProcess)
 
-        // Deliberately not using onTerminate/waitUntil yet: give the fake tmux (and the
-        // termination-detection machinery) ample time to have already fired internally, with no
-        // handler assigned to observe it, before this test assigns one.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Deliberately not assigning onTerminate yet: poll the internal latch directly until the
+        // fake tmux has already exited, with no handler assigned to observe it.
+        let terminatedBeforeHandlerAssigned = waitUntil { liveProcess.hasTerminatedForTesting }
+        #expect(terminatedBeforeHandlerAssigned)
 
         let lock = NSLock()
         var terminateCount = 0
@@ -220,18 +223,23 @@ import Testing
 
     /// Same race, for `onLine`: `ControlModeLineReader` (and now `LiveControlModeProcess`) can
     /// receive and reassemble a complete line before any caller has assigned `onLine` at all.
-    /// Forces the ordering deterministically (sleep past the fake tmux's write, then assign) and
-    /// asserts synchronously that the assignment itself delivers the buffered line — against the
-    /// pre-fix setter (no buffering; `self?.onLine?(line)` with a nil `onLine` just discards the
-    /// line), this line would be silently lost forever, never delivered even after `onLine` is
-    /// later assigned.
+    /// Forces the ordering deterministically — polls `hasPendingLineForTesting` (the internal
+    /// buffer, not the handler-delivery path) until the fake tmux's line has actually arrived,
+    /// rather than sleeping a fixed duration that can starve under the full suite's parallel
+    /// subprocess load — then assigns `onLine` and asserts synchronously that the assignment
+    /// itself delivers the buffered line. Against the pre-fix setter (no buffering;
+    /// `self?.onLine?(line)` with a nil `onLine` just discards the line), this line would be
+    /// silently lost forever, never delivered even after `onLine` is later assigned.
     @Test func onLineDeliversLinesThatArrivedBeforeHandlerWasAssigned() throws {
         let tmux = try makeFakeTmux(body: "printf '%%output %%51 hello\\n'\nwhile true; do sleep 60; done")
         let launcher = ProcessControlModeLauncher()
         let process = try launcher.launch(tmuxPath: tmux.path, target: "agents:1")
+        let liveProcess = try #require(process as? LiveControlModeProcess)
 
-        // Give the fake tmux time to write and flush its line before this test assigns onLine.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Poll until the fake tmux's line has actually arrived and buffered, with no onLine
+        // handler assigned to observe it yet.
+        let lineBufferedBeforeHandlerAssigned = waitUntil { liveProcess.hasPendingLineForTesting }
+        #expect(lineBufferedBeforeHandlerAssigned)
 
         let lock = NSLock()
         var lines: [String] = []

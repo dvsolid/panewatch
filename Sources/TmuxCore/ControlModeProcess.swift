@@ -201,4 +201,19 @@ final class LiveControlModeProcess: ControlModeProcess, @unchecked Sendable {
     func terminate() {
         process.terminate()
     }
+
+    /// Test-only: true once termination has latched internally, independent of whether
+    /// `onTerminate` has been assigned — lets tests poll for the pre-handler-assignment race
+    /// window instead of sleeping a fixed duration.
+    var hasTerminatedForTesting: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return didTerminate
+    }
+
+    /// Test-only: true once at least one line has arrived and is buffered awaiting `onLine`,
+    /// independent of whether a handler has been assigned.
+    var hasPendingLineForTesting: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !pendingLines.isEmpty
+    }
 }
