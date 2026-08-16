@@ -25,6 +25,21 @@ final class HeaderView: NSView {
     /// tracking stays correct even though the window itself moves mid-drag.
     private var dragOriginPanelX: CGFloat = 0
 
+    /// Set the first time `mouseDragged` actually fires during the current mouseDown/mouseUp
+    /// sequence. Gates `onDragEnd` so a plain click (mouseDown immediately followed by mouseUp,
+    /// no movement in between) is a no-op instead of redocking the panel — see `mouseUp`.
+    private var didDrag = false
+
+    /// `FloatingPanel.canBecomeKey`/`canBecomeMain` are hard-`false` and the panel is
+    /// `.nonactivatingPanel`, so the window is never key. AppKit's default for any view in a
+    /// non-key window is to swallow the first click purely to give the window attention rather
+    /// than deliver a real `mouseDown`, unless the hit view opts out via this override — same
+    /// bug and same fix as `TileCardContainerView.acceptsFirstMouse` (`TileCardView.swift`,
+    /// commit `32fcacf`). Without it, `mouseDown`/`mouseDragged`/`mouseUp` never reach this view
+    /// on the app's normal (non-activating, `.accessory`-policy) path, so the header can never
+    /// start a drag.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     /// The Header carries purely decorative subviews (icon, label, tint, divider) added by
     /// `FloatingPanel`. Without this override, a mouseDown landing on one of those subviews'
     /// frames would be dispatched to it instead of `HeaderView`, and (being non-interactive
@@ -38,14 +53,20 @@ final class HeaderView: NSView {
     override func mouseDown(with event: NSEvent) {
         dragOriginMouseX = NSEvent.mouseLocation.x
         dragOriginPanelX = window?.frame.origin.x ?? 0
+        didDrag = false
     }
 
     override func mouseDragged(with event: NSEvent) {
+        didDrag = true
         let deltaX = NSEvent.mouseLocation.x - dragOriginMouseX
         onDrag?(dragOriginPanelX + deltaX)
     }
 
     override func mouseUp(with event: NSEvent) {
+        // A bare click (no `mouseDragged` in between) must not redock the panel — `onDragEnd`
+        // resolves the nearest side and persists it, which would otherwise fire on every plain
+        // click now that `acceptsFirstMouse` lets mouseDown reach this view at all.
+        guard didDrag else { return }
         onDragEnd?()
     }
 }
