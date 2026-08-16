@@ -38,6 +38,12 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
     /// building the `ActivitySource.setWatchedPanes` pane-id -> session-name map, ADR-0004)
     /// don't have to parse it back out of `label`.
     public let sessionName: String
+    /// Carried through from `RawPane.windowIndex`, same reasoning as `sessionName`:
+    /// `StatusBarEngine.reconcile()` needs it, alongside `sessionName`, to group panes by tmux
+    /// window when deciding whether `windowActivityAt` can be trusted as *this* pane's own last
+    /// output — see `windowActivityAt`'s doc comment on `RawPane` for why that's window-scoped,
+    /// not pane-scoped.
+    public let windowIndex: Int
 
     /// `label` is built from `windowIndex`/`paneIndex`, never `windowName` — SPEC §3.4: dotted
     /// window names make `window_name` ambiguous. `taskText` is only ever non-nil for
@@ -52,6 +58,7 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
         label = "\(pane.sessionName):\(pane.windowIndex).\(pane.paneIndex)"
         windowActivityAt = pane.windowActivityAt
         sessionName = pane.sessionName
+        windowIndex = pane.windowIndex
         if type == .claudeCode && matchedTitle {
             taskText = String(pane.title.dropFirst(claudeCodeTitlePrefix.count))
         } else {

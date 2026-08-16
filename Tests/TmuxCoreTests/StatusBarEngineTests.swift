@@ -156,12 +156,16 @@ private func makeEngine(
 /// — the discrimination `now`-seeding on the first pass would have destroyed.
 @Test func firstReconcileAfterRestartReflectsTmuxsOwnActivityTimestamp() throws {
     let now = Date()
+    // Two *different* windows (`window_activity` is window-scoped in real tmux — every pane in
+    // the same window reports the identical epoch, live-verified — so a test asserting different
+    // seeded phases must put them in different windows, or it isn't modeling anything tmux can
+    // actually produce).
     let recentlyActiveLine = paneLine(
-        id: "%1", paneIndex: 1, title: "✳ task-one", pid: 100,
+        id: "%1", windowIndex: 1, paneIndex: 1, title: "✳ task-one", pid: 100,
         windowActivity: now.addingTimeInterval(-15).timeIntervalSince1970
     )
     let longIdleLine = paneLine(
-        id: "%2", paneIndex: 2, command: "zsh", title: "π - proj", pid: 200,
+        id: "%2", windowIndex: 2, paneIndex: 1, command: "zsh", title: "π - proj", pid: 200,
         windowActivity: now.addingTimeInterval(-7200).timeIntervalSince1970
     )
     let gateway = FakeTmuxGateway(output: [recentlyActiveLine, longIdleLine].joined(separator: "\n"))
@@ -171,6 +175,48 @@ private func makeEngine(
 
     #expect(firstPass.first { $0.id == "%1" }?.phase == .ready)
     #expect(firstPass.first { $0.id == "%2" }?.phase == .idle)
+}
+
+/// Bug repro (the EPIC-005-adjacent report this task fixes): `window_activity` is tracked per
+/// *window*, not per pane — live-verified against a real tmux 3.6a server, every pane sharing a
+/// window (e.g. two agent panes side by side, or an agent pane next to a plain shell the user is
+/// typing in) reports the identical epoch. Seeding straight from it per pane, as the previous fix
+/// did, means any pane whose window has a sibling inherits that sibling's activity as its own —
+/// on a fresh app start, a pane genuinely idle for hours reads as freshly active just because
+/// something else happened in the same tmux window. The fix: only trust `window_activity` to
+/// seed a pane when that pane is alone in its window — the one case where the window's timestamp
+/// and the pane's own timestamp are provably the same thing. A pane with a sibling starts `.idle`
+/// instead, self-correcting on its own first real output rather than showing a false positive
+/// that never corrects until that specific pane happens to produce output.
+@Test func paneSharingAWindowIsNotFalselySeededByASiblingsActivity() throws {
+    let now = Date()
+    let recentActivity = now.addingTimeInterval(-15).timeIntervalSince1970
+    // %1: a genuinely idle-for-hours agent pane, sharing window 1 with %2, a plain shell that
+    // just produced output — tmux reports the same recent `window_activity` for both, since it's
+    // the window's timestamp, not either pane's individually.
+    let idleAgentSharingWindow = paneLine(
+        id: "%1", windowIndex: 1, paneIndex: 1, title: "π - proj", pid: 100,
+        windowActivity: recentActivity
+    )
+    let busyShellSibling = paneLine(
+        id: "%2", windowIndex: 1, paneIndex: 2, command: "zsh", title: "", pid: 200,
+        windowActivity: recentActivity
+    )
+    // %3: a second agent, alone in its own window 2, with the same recent `window_activity` —
+    // the control: a solo pane's timestamp is trustworthy and should still seed normally.
+    let soloAgent = paneLine(
+        id: "%3", windowIndex: 2, paneIndex: 1, title: "✳ task-three", pid: 300,
+        windowActivity: recentActivity
+    )
+    let gateway = FakeTmuxGateway(
+        output: [idleAgentSharingWindow, busyShellSibling, soloAgent].joined(separator: "\n")
+    )
+    let engine = makeEngine(gateway: gateway)
+
+    let firstPass = try engine.reconcile(now: now)
+
+    #expect(firstPass.first { $0.id == "%1" }?.phase == .idle)
+    #expect(firstPass.first { $0.id == "%3" }?.phase == .ready)
 }
 
 /// Acceptance item 3: a pane still present and still classifying the same way across

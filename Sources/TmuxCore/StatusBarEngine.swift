@@ -49,15 +49,33 @@ public struct StatusBarEngine: Sendable {
     /// `list-panes -a`. `now` defaults to the real clock; a test can pin it to make the
     /// resulting phases deterministic without waiting on wall-clock time.
     public func reconcile(now: Date = Date()) throws -> [TileState] {
-        let panes = detector.classify(try discovery.scan())
+        let rawPanes = try discovery.scan()
+        let panes = detector.classify(rawPanes)
 
-        // Every discovered pane gets seeded from tmux's own `window_activity` the first time
-        // this store sees it — a no-op for a pane it already has a record for (from a prior
-        // `onOutput` or a prior seed here). Unlike seeding from `now`, this is correct on the
-        // very first `reconcile()` too: `window_activity` is tracked by the tmux server across
-        // this app's whole lifetime, not reset by an app relaunch, so a pane that was active 10s
-        // ago still reads as active immediately after a restart instead of a cold `.idle`.
-        for pane in panes {
+        // `window_activity` is tracked per *window*, not per pane (confirmed live: every pane
+        // in the same tmux window reports the identical epoch) — it only equals a given pane's
+        // own last-output time when that pane is alone in its window. A window with a sibling
+        // pane (another agent, or a plain shell the user is typing in) makes every pane in it
+        // report the sibling's activity as its own, so seeding from it there would paint an
+        // untouched Tile active off someone else's output. Counted from `rawPanes`, not the
+        // already-filtered `panes`, since a non-agent sibling (e.g. a shell) is exactly the kind
+        // of pane that can pollute this window's timestamp too.
+        var paneCountByWindow: [String: Int] = [:]
+        for raw in rawPanes {
+            paneCountByWindow["\(raw.sessionName):\(raw.windowIndex)", default: 0] += 1
+        }
+
+        // Every discovered pane in a solo-pane window gets seeded from tmux's own
+        // `window_activity` the first time this store sees it — a no-op for a pane it already
+        // has a record for (from a prior `onOutput` or a prior seed here). Unlike seeding from
+        // `now`, this is correct on the very first `reconcile()` too: `window_activity` is
+        // tracked by the tmux server across this app's whole lifetime, not reset by an app
+        // relaunch, so a pane that was active 10s ago still reads as active immediately after a
+        // restart instead of a cold `.idle`. A pane sharing its window is left unseeded instead
+        // — it starts `.idle` and self-corrects on its own first real `onOutput`, rather than
+        // risking a false `.blinking`/`.ready` that never self-corrects until that pane happens
+        // to produce output itself.
+        for pane in panes where paneCountByWindow["\(pane.sessionName):\(pane.windowIndex)"] == 1 {
             activityStateStore.seedIfAbsent(paneId: pane.id, at: pane.windowActivityAt)
         }
 
