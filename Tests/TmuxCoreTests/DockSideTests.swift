@@ -27,6 +27,18 @@ import Testing
         #expect(frame.height == screen.height)
     }
 
+    @Test func resolvesToLeftWhenThePanelsCenterIsLeftOfTheScreensMidpoint() {
+        let side = DockSide.nearest(panelX: 0, panelWidth: 138, in: screen)
+
+        #expect(side == .left)
+    }
+
+    @Test func resolvesToRightWhenThePanelsCenterIsRightOfTheScreensMidpoint() {
+        let side = DockSide.nearest(panelX: 1300, panelWidth: 138, in: screen)
+
+        #expect(side == .right)
+    }
+
     @Test func roundTripsAnArbitrarySequenceOfSavesThroughAStore() {
         let store = FakeDockSideStore()
 

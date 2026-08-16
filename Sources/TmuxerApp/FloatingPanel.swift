@@ -114,12 +114,12 @@ final class FloatingPanel: NSPanel {
         material.layer?.masksToBounds = true
         content.addSubview(material)
 
-        // Static branding header — purely decorative, no live data, never updates after
-        // init. Echoes the Menu Bar Icon's own `rectangle.stack` glyph so the panel reads
-        // as the same product at a glance. Sits on top of `material` (no background of
-        // its own), pinned to the content's top edge via `.minYMargin` so it stays put
-        // if the panel is ever resized (e.g. a screen change while hidden).
-        let header = NSView(frame: NSRect(x: 0, y: content.bounds.height - Self.headerHeight, width: content.bounds.width, height: Self.headerHeight))
+        // Branding header, doubling as the drag surface for changing Dock Side (TASK-031) —
+        // no longer purely decorative. Echoes the Menu Bar Icon's own `rectangle.stack` glyph
+        // so the panel reads as the same product at a glance. Sits on top of `material` (no
+        // background of its own), pinned to the content's top edge via `.minYMargin` so it
+        // stays put if the panel is ever resized (e.g. a screen change while hidden).
+        let header = HeaderView(frame: NSRect(x: 0, y: content.bounds.height - Self.headerHeight, width: content.bounds.width, height: Self.headerHeight))
         header.autoresizingMask = [.width, .minYMargin]
         content.addSubview(header)
 
@@ -174,6 +174,24 @@ final class FloatingPanel: NSPanel {
         divider.wantsLayer = true
         divider.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         header.addSubview(divider)
+
+        // TASK-031: dragging the Header moves the panel's frame live, tracking the cursor's
+        // x-position — `isMovableByWindowBackground` stays `false` (set above), so the panel
+        // body outside the Header remains non-draggable; only this view's own pointer tracking
+        // can move the window.
+        header.onDrag = { [weak self] proposedX in
+            guard let self else { return }
+            setFrameOrigin(NSPoint(x: proposedX, y: frame.origin.y))
+        }
+        // Release resolves the nearest edge from wherever the drag left the panel and jumps
+        // there via the same `setDockSide(_:)` the Dock Side menu path already uses (TASK-030)
+        // — no interpolation between "following the cursor" and "snapped," and persistence is
+        // free by reusing that one method.
+        header.onDragEnd = { [weak self] in
+            guard let self, let visible = NSScreen.main?.visibleFrame else { return }
+            let side = DockSide.nearest(panelX: frame.origin.x, panelWidth: frame.width, in: visible)
+            setDockSide(side)
+        }
 
         scrollView.frame = NSRect(x: 0, y: 0, width: content.bounds.width, height: content.bounds.height - Self.headerHeight)
         scrollView.autoresizingMask = [.width, .height]

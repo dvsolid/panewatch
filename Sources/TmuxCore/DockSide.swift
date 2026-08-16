@@ -25,4 +25,14 @@ public enum DockSide: String, Equatable {
         }
         return CGRect(x: x, y: visibleFrame.minY, width: width, height: visibleFrame.height)
     }
+
+    /// Resolves which edge is nearest given the panel's current x-position mid-drag —
+    /// `panelX` is the panel's left-edge origin, same convention `frame(width:in:side:)`
+    /// returns. Compares the panel's *center* (not its left edge) against the visible
+    /// frame's horizontal midpoint, so a wide panel docks based on where its bulk actually
+    /// sits rather than where its leading edge happens to be. TASK-031.
+    public static func nearest(panelX: CGFloat, panelWidth: CGFloat, in visibleFrame: CGRect) -> DockSide {
+        let panelCenterX = panelX + panelWidth / 2
+        return panelCenterX < visibleFrame.midX ? .left : .right
+    }
 }
