@@ -391,4 +391,90 @@ private final class FakeClock: @unchecked Sendable {
         #expect(scheduler.pendingCount == 0) // nothing scheduled — no reconnect attempt at all
         #expect(launcher.launchCount(for: "agents") == 1)
     }
+
+    // MARK: - TASK-029: the concrete FailableActivitySource signal
+
+    /// The literal example the Slice names: `ControlModeProcessLauncher.launch` throwing at
+    /// attach time (e.g. an invalid `tmuxPath`) before this adapter has ever proven control
+    /// mode works at all.
+    @Test func launchFailureBeforeAnyConfirmationFiresOnFailure() {
+        let launcher = FakeControlModeProcessLauncher()
+        launcher.setShouldFail(true, for: "agents")
+        let source = ControlModeActivitySource(launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux")
+        var failureFired = false
+        source.onFailure = { failureFired = true }
+
+        source.setWatchedPanes(["%1": "agents"])
+
+        #expect(failureFired)
+    }
+
+    /// Live-verified (real `tmux -C attach` against a nonexistent session): `launcher.launch`
+    /// does *not* throw — the process spawns fine and tmux replies
+    /// `%begin`/`<error text>`/`%error`/`%exit` before ever reaching `%end`. Without a signal
+    /// for this shape, `spawnClient` reports success, `attemptReconnect` resets backoff to 0,
+    /// and the resulting immediate-`%exit` retriggers the delay:0 settle tick — a real,
+    /// unbounded respawn storm this test guards against by requiring both the failure signal
+    /// and a paced (non-zero) retry delay.
+    @Test func unconfirmedTerminationBeforeAnyConfirmationFiresOnFailureAndPacesRetry() {
+        let launcher = FakeControlModeProcessLauncher()
+        let scheduler = FakeScheduler()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", scheduler: scheduler
+        )
+        var failureFired = false
+        source.onFailure = { failureFired = true }
+
+        source.setWatchedPanes(["%1": "agents"])
+        let process = launcher.process(for: "agents")!
+        // Never emits %end or %output — the attach itself never confirmed before dying.
+        process.simulateTermination()
+
+        #expect(failureFired)
+        let delay = scheduler.pendingDelays.last
+        #expect(delay != nil && delay! > 0)
+    }
+
+    /// Falsifiable against "fires on any failure, ever" (the design the second unit test in
+    /// `FallbackActivitySourceTests` exists to distinguish at the `FallbackActivitySource`
+    /// layer): once *any* session has proven control mode works, a later, unrelated session's
+    /// unconfirmed death must not report failure again — that ongoing case is TASK-027's
+    /// retry-forever contract, not a fallback-worthy signal.
+    @Test func unconfirmedFailureAfterAnyPriorConfirmationDoesNotFireOnFailure() {
+        let launcher = FakeControlModeProcessLauncher()
+        let scheduler = FakeScheduler()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", scheduler: scheduler
+        )
+        source.setWatchedPanes(["%1": "agents", "%2": "other"])
+        let agentsProcess = launcher.process(for: "agents")!
+        agentsProcess.emit("%end 1 1 0") // confirms the pool at least once
+        let otherProcess = launcher.process(for: "other")!
+
+        var failureFired = false
+        source.onFailure = { failureFired = true }
+
+        otherProcess.simulateTermination() // "other" itself never confirmed
+
+        #expect(!failureFired)
+    }
+
+    /// Regression guard for TASK-027 acceptance item 1 (quick single-session reconnect):
+    /// confirming a session's attach must keep its later, ordinary termination on the existing
+    /// immediate (delay: 0) settle-tick path — proving the new backoff pacing above is scoped
+    /// to *unconfirmed* terminations only, not applied indiscriminately to every termination.
+    @Test func confirmedSessionTerminatingReconnectsImmediatelyNotOnBackoff() {
+        let launcher = FakeControlModeProcessLauncher()
+        let scheduler = FakeScheduler()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", scheduler: scheduler
+        )
+        source.setWatchedPanes(["%1": "agents"])
+        let process = launcher.process(for: "agents")!
+        process.emit("%end 1 1 0") // confirms
+
+        process.simulateTermination()
+
+        #expect(scheduler.pendingDelays == [0])
+    }
 }

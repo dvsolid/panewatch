@@ -37,9 +37,20 @@ final class StatusBarShell: NSObject {
         // tmux-talking collaborators built at this composition root, per `StatusBarEngine`'s
         // own doc comment on why `TmuxCore` never defaults them.
         let gateway = ProcessTmuxGateway()
+        // TASK-029: the real stack, composition-root wired — `ControlModeActivitySource`
+        // (event-driven, SPEC §3.2) as primary, falling back to the already-proven
+        // `PollingActivitySource` (SPEC §3.1) on the failure signal `FailableActivitySource`
+        // defines (never having confirmed a working attach). `secondary` sits idle — its own
+        // `probeInterval` timer runs from `init`, but with an empty watched-pane set until
+        // `FallbackActivitySource` actually switches, so it spawns no `capture-pane` calls
+        // and has no UI-visible effect unless/until the switch happens.
+        let activitySource = FallbackActivitySource(
+            primary: ControlModeActivitySource(launcher: ProcessControlModeLauncher(), tmuxPath: gateway.tmuxPath),
+            secondary: PollingActivitySource(gateway: gateway)
+        )
         return StatusBarEngine(
             discovery: PaneDiscovery(gateway: gateway),
-            activitySource: PollingActivitySource(gateway: gateway)
+            activitySource: activitySource
         )
     }()) {
         self.engine = engine

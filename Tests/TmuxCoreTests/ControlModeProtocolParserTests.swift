@@ -32,12 +32,28 @@ import Testing
     /// unrecognized lines to classify silently, never throw.
     @Test(arguments: [
         "%begin 1786664109 25370040 0",
-        "%end 1786664109 25370040 0",
         "%session-changed $12 ztest1",
         "%some-future-notification with arbitrary args",
     ])
     func nonOutputNonExitNotificationsClassifyAsOther(line: String) {
         let event = ControlModeProtocolParser.parse(line)
+        #expect(event == .other)
+    }
+
+    /// TASK-029: `%end` is the reply to the implicit `attach-session` command `-C attach`
+    /// itself issues — the only `%begin`/`%end`/`%error` triple a *read-only* control client
+    /// (never writes further commands) will ever see. Its presence is therefore the
+    /// protocol-level proof an attach actually succeeded, distinct from `%error` (classified
+    /// as `.other`, the same as before) — live-verified: a nonexistent-session attach produces
+    /// `%begin`/`<error text>`/`%error`/`%exit`, never `%end`.
+    @Test func endLineParsesToAttachConfirmedEvent() {
+        let event = ControlModeProtocolParser.parse("%end 1786664109 25370040 0")
+        #expect(event == .attachConfirmed)
+    }
+
+    /// `%error` is the failure counterpart to `%end` — must never be conflated with it.
+    @Test func errorLineClassifiesAsOtherNotAttachConfirmed() {
+        let event = ControlModeProtocolParser.parse("%error 1786864109 1 0")
         #expect(event == .other)
     }
 
