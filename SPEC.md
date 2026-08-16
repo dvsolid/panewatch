@@ -477,7 +477,10 @@ mechanics that §4 explicitly defers to that feature's own spec.
 *Sequenced together deliberately: both halves need the same `client_tty` → terminal-app mapping, and both are the payoff for Phase 1's seam.*
 
 ### Phase 3 — Rich UI
-- Animated fade transitions
+- Fading phase color — not a CoreAnimation transition: `TileCardView.apply(_:blinkOn:)` sets
+  the Fading color with a direct, non-`.animator()` assignment, so it advances in discrete
+  steps each `probeInterval` (5s) re-render as `colorFraction` progresses (§1, §3). The one
+  genuinely animated element is the Blinking phase's dot-size pulse, via `NSAnimationContext`.
 - Task name display
 - Hover Preview Popup — not a text tooltip: a live, read-only terminal preview of the pane's
   actual output, backed by a short-lived read-only tmux client (§4, EPIC-003, feature spec
