@@ -42,6 +42,23 @@ import Testing
         #expect(popup.minX >= tile.maxX)
     }
 
+    /// TASK-030 acceptance item 4 (regression check): docking the panel left moves every Tile
+    /// near `visibleFrame.minX` instead of `maxX` — the mirror image of the pinned-right posture
+    /// every other test in this suite assumes. `HoverPopupPlacement` needs no change for this
+    /// (feature spec "Non-goals confirmed": `roomOnRight`/`roomOnLeft` already adapts), so this
+    /// pins that non-goal as an executable regression check rather than a comment. The tile
+    /// position is derived from `DockSide.frame`, the same geometry `FloatingPanel` would use
+    /// once actually docked left, not a hand-picked x.
+    @Test func opensFullyOnScreenWhenThePanelIsDockedLeft() {
+        let panelFrame = DockSide.frame(width: 138, in: screen, side: .left)
+        let tile = CGRect(x: panelFrame.minX + 8, y: 400, width: 120, height: 64)
+
+        let popup = HoverPopupPlacement.frame(forTile: tile, within: screen)
+
+        #expect(popup.minX >= tile.maxX)
+        #expect(screen.contains(popup))
+    }
+
     @Test func clampsAtTopWhenTileIsNearTheScreensTopEdge() {
         let tile = CGRect(x: 1400, y: 880, width: 120, height: 64)
 

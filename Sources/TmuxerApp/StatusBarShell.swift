@@ -24,13 +24,6 @@ final class StatusBarShell: NSObject {
     /// inside the adapter, hidden behind `ActivitySource` — ADR-0001) and stays correct under
     /// any future adapter.
     private var phaseRefreshTimer: Timer?
-    private let quitMenu: NSMenu = {
-        let menu = NSMenu()
-        menu.addItem(
-            NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        )
-        return menu
-    }()
 
     init(engine: StatusBarEngine = {
         // One `TmuxGateway` shared by discovery and activity polling — both are real
@@ -117,18 +110,53 @@ final class StatusBarShell: NSObject {
     @objc private func statusItemClicked() {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
-            showQuitMenu()
+            showStatusItemMenu()
         } else {
             panel.toggleVisibility()
         }
     }
 
     /// Attaching a menu permanently to the status item would make left-click open it instead
-    /// of toggling the panel — assign it only for the duration of this one right-click.
-    private func showQuitMenu() {
+    /// of toggling the panel — assign it only for the duration of this one right-click. Rebuilds
+    /// the menu fresh on every call (TASK-030) so the Dock Side items' checkmarks always reflect
+    /// `panel.dockSide` as it stands right now, not whatever it was the last time the app right-
+    /// clicked.
+    private func showStatusItemMenu() {
         guard let item = statusItem else { return }
-        item.menu = quitMenu
+        item.menu = buildStatusItemMenu()
         item.button?.performClick(nil)
         item.menu = nil
+    }
+
+    /// TASK-030: two radio-style items (checkmark on the active side) rather than one toggle
+    /// item whose title/label swaps — chosen so "reflecting the currently active side" (this
+    /// task's acceptance criterion) is directly observable as menu state, not just inferable
+    /// from a label's wording.
+    private func buildStatusItemMenu() -> NSMenu {
+        let menu = NSMenu()
+
+        let dockLeft = NSMenuItem(title: "Dock Left", action: #selector(dockLeftSelected), keyEquivalent: "")
+        dockLeft.target = self
+        dockLeft.state = panel.dockSide == .left ? .on : .off
+        menu.addItem(dockLeft)
+
+        let dockRight = NSMenuItem(title: "Dock Right", action: #selector(dockRightSelected), keyEquivalent: "")
+        dockRight.target = self
+        dockRight.state = panel.dockSide == .right ? .on : .off
+        menu.addItem(dockRight)
+
+        menu.addItem(.separator())
+        menu.addItem(
+            NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        )
+        return menu
+    }
+
+    @objc private func dockLeftSelected() {
+        panel.setDockSide(.left)
+    }
+
+    @objc private func dockRightSelected() {
+        panel.setDockSide(.right)
     }
 }

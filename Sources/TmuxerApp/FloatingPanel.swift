@@ -24,6 +24,15 @@ final class FloatingPanel: NSPanel {
     /// `TileCardView` stays visual-composition-only.
     private let hoverController: HoverPreviewController
 
+    /// Persistence seam for `dockSide` — TASK-030. Read once in `init` and written back on every
+    /// `setDockSide(_:)` call; never re-read inside `frame(on:side:)` itself, so `dockSide` stays
+    /// the single in-memory authority for every frame recomputation (`toggleVisibility`, a future
+    /// screen-configuration-change path) between explicit side changes.
+    private let dockSideStore: any DockSideStore
+    /// The panel's current screen-edge attachment (TASK-030). Defaults from `dockSideStore.load()`
+    /// at construction; `setDockSide(_:)` is the only way it changes afterward.
+    private(set) var dockSide: DockSide
+
     /// One retained `TileCardView` per rendered Tile, keyed by `pane_id` (`TileState.id`) —
     /// lets `render(_:)` and the blink timer update an existing Tile's color/text in place
     /// instead of replacing `documentView`, which would reset the scroll position every call
@@ -59,10 +68,15 @@ final class FloatingPanel: NSPanel {
 
     /// `activityMuter` is forwarded straight to `HoverPreviewController`, unused otherwise —
     /// see that property's doc comment for why the popup's own zoom needs it at all.
-    init(activityMuter: (any ActivityMuter)? = nil) {
+    /// `dockSideStore` defaults to the real `UserDefaultsDockSideStore`; tests inject a fake
+    /// (TASK-030).
+    init(activityMuter: (any ActivityMuter)? = nil, dockSideStore: any DockSideStore = UserDefaultsDockSideStore()) {
         self.hoverController = HoverPreviewController(activityMuter: activityMuter)
+        self.dockSideStore = dockSideStore
+        let side = dockSideStore.load()
+        self.dockSide = side
         super.init(
-            contentRect: FloatingPanel.frame(on: NSScreen.main),
+            contentRect: FloatingPanel.frame(on: NSScreen.main, side: side),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -189,9 +203,19 @@ final class FloatingPanel: NSPanel {
             // nothing else prunes it, since `tileSetWillChange` only fires from `render(_:)`.
             hoverController.closeActivePreview()
         } else {
-            setFrame(FloatingPanel.frame(on: NSScreen.main), display: true)
+            setFrame(FloatingPanel.frame(on: NSScreen.main, side: dockSide), display: true)
             orderFrontRegardless()
         }
+    }
+
+    /// Jumps the panel to `side` immediately — `setFrame(_:display:)`, never the `animate:`
+    /// overload, per the feature spec's "no animation anywhere in this feature" decision,
+    /// confirmed twice — and persists the choice via `dockSideStore`. Called from
+    /// `StatusBarShell`'s Dock Side menu items (TASK-030).
+    func setDockSide(_ side: DockSide) {
+        dockSide = side
+        dockSideStore.save(side)
+        setFrame(FloatingPanel.frame(on: NSScreen.main, side: side), display: true)
     }
 
     /// Synchronous Preview Client teardown for app termination, forwarded from
@@ -271,7 +295,8 @@ final class FloatingPanel: NSPanel {
         }
     }
 
-    private static func frame(on screen: NSScreen?) -> NSRect {
+    /// TASK-030: takes the current `DockSide` rather than always pinning to the right edge.
+    private static func frame(on screen: NSScreen?, side: DockSide) -> NSRect {
         // TASK-007: widened from 60pt to give tiles more room (TASK-008 follow-on).
         // TASK-012: widened again 92 -> 110pt so `TileCardView.cardSize.width` could grow past
         // its old 84pt ceiling (92pt was exactly `84 + 2*4`, the max the old card width could
@@ -285,8 +310,11 @@ final class FloatingPanel: NSPanel {
         // 130 -> 107pt-under-`.legacy` math (unaffected by this change, same margin delta).
         let width: CGFloat = 138
         guard let visible = screen?.visibleFrame else {
+            // No screen available (e.g. headless test host): the exact x doesn't matter, so this
+            // stays left-aligned regardless of `side` rather than branching for a case with no
+            // observable effect.
             return NSRect(x: 0, y: 0, width: width, height: 400)
         }
-        return NSRect(x: visible.maxX - width, y: visible.minY, width: width, height: visible.height)
+        return DockSide.frame(width: width, in: visible, side: side)
     }
 }
