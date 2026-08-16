@@ -77,8 +77,12 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         NSFont(name: preferredFontName, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 
-    init(gateway: any TmuxGateway = ProcessTmuxGateway(), tmuxPath: String = TmuxCore.defaultTmuxPath) {
-        self.lifecycle = PreviewClientLifecycle(gateway: gateway)
+    init(
+        gateway: any TmuxGateway = ProcessTmuxGateway(),
+        tmuxPath: String = TmuxCore.defaultTmuxPath,
+        activityMuter: (any ActivityMuter)? = nil
+    ) {
+        self.lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: activityMuter)
         self.tmuxPath = tmuxPath
         super.init()
         terminalView.processDelegate = self

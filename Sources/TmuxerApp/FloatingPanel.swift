@@ -22,7 +22,7 @@ final class FloatingPanel: NSPanel {
     /// but never drives its show/hide/position logic directly; that's this controller's own
     /// concern, mirroring how `FloatingPanel` itself owns window/scroll/positioning while
     /// `TileCardView` stays visual-composition-only.
-    private let hoverController = HoverPreviewController()
+    private let hoverController: HoverPreviewController
 
     /// One retained `TileCardView` per rendered Tile, keyed by `pane_id` (`TileState.id`) —
     /// lets `render(_:)` and the blink timer update an existing Tile's color/text in place
@@ -57,7 +57,10 @@ final class FloatingPanel: NSPanel {
     private static let headerIconSize: CGFloat = 14
     private static let headerIconLabelSpacing: CGFloat = 6
 
-    init() {
+    /// `activityMuter` is forwarded straight to `HoverPreviewController`, unused otherwise —
+    /// see that property's doc comment for why the popup's own zoom needs it at all.
+    init(activityMuter: (any ActivityMuter)? = nil) {
+        self.hoverController = HoverPreviewController(activityMuter: activityMuter)
         super.init(
             contentRect: FloatingPanel.frame(on: NSScreen.main),
             styleMask: [.nonactivatingPanel, .borderless],

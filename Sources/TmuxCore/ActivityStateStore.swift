@@ -12,6 +12,8 @@ public final class ActivityStateStore: @unchecked Sendable {
     private let readyWindow: TimeInterval
     private let fadeWindow: TimeInterval
     private var lastOutputAt: [String: Date] = [:]
+    /// Per-pane deadline before which `recordOutput` is ignored — see `muteOutput(paneId:until:)`.
+    private var mutedUntil: [String: Date] = [:]
     private let lock = NSLock()
 
     public init(
@@ -27,7 +29,32 @@ public final class ActivityStateStore: @unchecked Sendable {
     public func recordOutput(paneId: String, at date: Date) {
         lock.lock()
         defer { lock.unlock() }
+        if let deadline = mutedUntil[paneId], date < deadline {
+            return
+        }
         lastOutputAt[paneId] = date
+    }
+
+    /// Suppresses `recordOutput` for `paneId` up to (not including) `until` — extends rather
+    /// than shortens an existing mute, so two overlapping mute calls (e.g. a very brief hover
+    /// whose zoom-in and zoom-out land close together) merge into one window instead of the
+    /// second call cutting the first short.
+    ///
+    /// Exists for `PreviewClientLifecycle` (TmuxCore): the Hover Preview Popup's `resize-pane
+    /// -Z` zoom is a real, shared window-level tmux operation — verified live that it resizes
+    /// the previewed pane, which its foreground program (always a full-screen TUI for an Agent
+    /// Pane) redraws in response, producing a genuinely different `capture-pane` sample. Left
+    /// unmuted, `PollingActivitySource` correctly reports that as new output and flips the Tile
+    /// active on every hover, even though nothing was typed. This is the one seam that lets a
+    /// known, self-inflicted repaint be told apart from real activity without weakening
+    /// `PollingActivitySource`'s own change detection for every other case.
+    public func muteOutput(paneId: String, until: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = mutedUntil[paneId], existing >= until {
+            return
+        }
+        mutedUntil[paneId] = until
     }
 
     /// Seeds `lastOutputAt` for a pane this store has never recorded, without disturbing one it
@@ -70,3 +97,12 @@ public final class ActivityStateStore: @unchecked Sendable {
         }
     }
 }
+
+/// The minimal seam `PreviewClientLifecycle` depends on to mute its own zoom-induced repaint —
+/// `muteOutput(paneId:until:)` alone, rather than the whole of `ActivityStateStore`, so a caller
+/// that only needs to suppress activity doesn't also gain the ability to read or reset phases.
+public protocol ActivityMuter: Sendable {
+    func muteOutput(paneId: String, until: Date)
+}
+
+extension ActivityStateStore: ActivityMuter {}

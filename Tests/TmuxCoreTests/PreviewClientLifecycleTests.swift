@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TmuxCore
 
@@ -66,7 +67,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
 
         let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
-        #expect(result == PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true, windowHeight: 40))
+        #expect(result == PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: true, windowHeight: 40))
         #expect(gateway.calls == [
             PreviewClientInvocation.paneLookupArguments(paneID: paneID),
             PreviewClientInvocation.killGroupArguments(groupName: groupName),
@@ -173,7 +174,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let gateway = ScriptedTmuxGateway()
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false, windowHeight: 40))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: false, windowHeight: 40))
 
         #expect(gateway.calls == [PreviewClientInvocation.killGroupArguments(groupName: groupName)])
     }
@@ -185,7 +186,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let gateway = ScriptedTmuxGateway()
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: true, windowHeight: 40))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: true, windowHeight: 40))
 
         #expect(gateway.calls == [
             PreviewClientInvocation.toggleZoomArguments(groupName: groupName),
@@ -201,6 +202,88 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         gateway.fail(PreviewClientInvocation.killGroupArguments(groupName: groupName))
         let lifecycle = PreviewClientLifecycle(gateway: gateway)
 
-        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(groupName: groupName, zoomedByUs: false, windowHeight: 40))
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: false, windowHeight: 40))
+    }
+
+    // MARK: - Activity muting (zoom's transient repaint must not read as real pane output)
+
+    /// Records every `muteOutput` call it receives — the fake `ActivityMuter` these tests
+    /// script against, mirroring `ScriptedTmuxGateway`'s own recording style.
+    private final class FakeActivityMuter: ActivityMuter, @unchecked Sendable {
+        private(set) var calls: [(paneId: String, until: Date)] = []
+        func muteOutput(paneId: String, until: Date) {
+            calls.append((paneId, until))
+        }
+    }
+
+    private let referenceDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+    /// The zoom toggle that isolates the previewed pane is a real, visible repaint (verified
+    /// live against tmux — see `ActivityStateStore.muteOutput`'s doc comment) — `prepare` must
+    /// mute it for exactly `zoomActivityMuteWindow` from the injected clock's `now`, not the
+    /// wall clock, so this stays deterministic.
+    @Test func prepareGroupSessionMutesActivityWhenItZooms() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter, clock: { self.referenceDate })
+
+        _ = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(muter.calls.count == 1)
+        #expect(muter.calls.first?.paneId == paneID)
+        #expect(muter.calls.first?.until == referenceDate.addingTimeInterval(TmuxCore.defaultProbeInterval + 2))
+    }
+
+    /// The window came in already zoomed — no toggle ran, so nothing on screen actually
+    /// changed, so nothing should be muted.
+    @Test func prepareGroupSessionDoesNotMuteActivityWhenAlreadyZoomed() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        gateway.setResponse("1", for: PreviewClientInvocation.zoomedQueryArguments(groupName: groupName))
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter)
+
+        _ = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(muter.calls.isEmpty)
+    }
+
+    /// The zoom toggle itself failed (best-effort) — no real state change happened, so muting
+    /// here would only swallow genuine future output for no reason.
+    @Test func prepareGroupSessionDoesNotMuteActivityWhenTheZoomToggleFails() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        gateway.fail(PreviewClientInvocation.toggleZoomArguments(groupName: groupName))
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter)
+
+        let result = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(result.zoomedByUs == false)
+        #expect(muter.calls.isEmpty)
+    }
+
+    /// The mirror image: restoring zoom on the way out is just as real a repaint as zooming in,
+    /// so teardown must mute it too, keyed off the same `paneID` the session carries.
+    @Test func teardownGroupSessionMutesActivityWhenRestoringZoom() {
+        let gateway = ScriptedTmuxGateway()
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter, clock: { self.referenceDate })
+
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: true, windowHeight: 40))
+
+        #expect(muter.calls.count == 1)
+        #expect(muter.calls.first?.paneId == paneID)
+        #expect(muter.calls.first?.until == referenceDate.addingTimeInterval(TmuxCore.defaultProbeInterval + 2))
+    }
+
+    /// The window was never zoomed by us (prepare found it already zoomed, or zoom failed) —
+    /// teardown must not toggle, and therefore must not mute either.
+    @Test func teardownGroupSessionDoesNotMuteActivityWhenNotZoomedByUs() {
+        let gateway = ScriptedTmuxGateway()
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter)
+
+        lifecycle.teardownGroupSession(PreviewClientLifecycle.GroupSession(paneID: paneID, groupName: groupName, zoomedByUs: false, windowHeight: 40))
+
+        #expect(muter.calls.isEmpty)
     }
 }

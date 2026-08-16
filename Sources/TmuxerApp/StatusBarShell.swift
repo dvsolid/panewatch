@@ -11,7 +11,7 @@ import TmuxCore
 @MainActor
 final class StatusBarShell: NSObject {
     private var statusItem: NSStatusItem?
-    private let panel = FloatingPanel()
+    private let panel: FloatingPanel
     private let engine: StatusBarEngine
     /// Re-runs discovery on `discoveryInterval` (TASK-006) — the only timer that spawns
     /// `list-panes -a`. New/closed agent panes join or leave the Tile list on this cadence,
@@ -43,6 +43,10 @@ final class StatusBarShell: NSObject {
         )
     }()) {
         self.engine = engine
+        // Shares `engine`'s own `ActivityStateStore` with the Hover Preview Popup so its
+        // `PreviewClientLifecycle` can mute the popup's own zoom-induced repaint out of
+        // activity tracking — see `StatusBarEngine.activityStateStore`'s doc comment.
+        self.panel = FloatingPanel(activityMuter: engine.activityStateStore)
     }
 
     /// Places the Menu Bar Icon, hides the Dock icon, runs one discovery pass to populate the

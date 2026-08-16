@@ -113,3 +113,33 @@ private let referenceDate = Date(timeIntervalSince1970: 1_700_000_000)
 
     #expect(afterReset == .blinking)
 }
+
+/// `PreviewClientLifecycle`'s reason for `muteOutput` existing: a `recordOutput` whose `at`
+/// falls before the muted deadline must be ignored entirely — the pane must stay exactly where
+/// it was, not reset to Blinking — while one at or after the deadline takes effect normally.
+@Test func mutedOutputIsIgnoredUntilTheMuteWindowEnds() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(50)) == .ready)
+
+    store.muteOutput(paneId: "%1", until: referenceDate.addingTimeInterval(60))
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(55))
+    // Falsifiable: recordOutput taking effect here would reset to `.blinking` at this `now`.
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(56)) == .ready)
+
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(60))
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(61)) == .blinking)
+}
+
+/// Acceptance for the "brief hover" case: a second, shorter `muteOutput` call must not cut the
+/// first mute short — the window only ever grows within one pane's overlapping mutes.
+@Test func muteOutputExtendsRatherThanShortensAnExistingMute() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+
+    store.muteOutput(paneId: "%1", until: referenceDate.addingTimeInterval(60))
+    store.muteOutput(paneId: "%1", until: referenceDate.addingTimeInterval(30))
+
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(45))
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(46)) == .ready)
+}

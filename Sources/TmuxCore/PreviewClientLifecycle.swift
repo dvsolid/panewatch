@@ -20,8 +20,11 @@ public struct PreviewClientLifecycle: Sendable {
     /// it, not the user, is responsible for un-zooming on the way out. Zoom is a window-level
     /// property shared with the source session (`PreviewClientInvocation.zoomedQueryArguments`'s
     /// doc comment), so leaving this false when the window came in already zoomed matters:
-    /// tearing down must never un-zoom a state the user set themselves.
+    /// tearing down must never un-zoom a state the user set themselves. Also carries `paneID`
+    /// so `teardownGroupSession` can mute the same pane its own restoring un-zoom will repaint,
+    /// without every caller having to pass it back in separately.
     public struct GroupSession: Sendable, Equatable {
+        public let paneID: String
         public let groupName: String
         public let zoomedByUs: Bool
         /// `#{window_height}` of the real tmux window behind this group, captured at prepare
@@ -40,10 +43,27 @@ public struct PreviewClientLifecycle: Sendable {
         public let windowHeight: Int
     }
 
-    public let gateway: any TmuxGateway
+    /// How long a zoom toggle's own transient repaint is muted from `ActivityStateStore` —
+    /// long enough that at least one full `PollingActivitySource` probe cycle is guaranteed to
+    /// land inside the window rather than racing it (the two run on independent clocks), short
+    /// enough that a real burst of agent output landing right as a hover starts or ends isn't
+    /// swallowed for long. `TmuxCore.defaultProbeInterval` plus a fixed margin for scheduling
+    /// jitter, not a multiple of it — the margin only needs to cover jitter, not a whole extra
+    /// cycle.
+    static let zoomActivityMuteWindow: TimeInterval = TmuxCore.defaultProbeInterval + 2
 
-    public init(gateway: any TmuxGateway) {
+    public let gateway: any TmuxGateway
+    private let activityMuter: (any ActivityMuter)?
+    private let clock: @Sendable () -> Date
+
+    public init(
+        gateway: any TmuxGateway,
+        activityMuter: (any ActivityMuter)? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.gateway = gateway
+        self.activityMuter = activityMuter
+        self.clock = clock
     }
 
     /// Runs every one-shot step that must succeed before the long-lived attach spawns, and
@@ -87,8 +107,9 @@ public struct PreviewClientLifecycle: Sendable {
         }
 
         return GroupSession(
+            paneID: paneID,
             groupName: groupName,
-            zoomedByUs: zoomIfNeeded(groupName: groupName),
+            zoomedByUs: zoomIfNeeded(groupName: groupName, paneID: paneID),
             windowHeight: geometry.windowHeight
         )
     }
@@ -101,6 +122,7 @@ public struct PreviewClientLifecycle: Sendable {
     public func teardownGroupSession(_ session: GroupSession) {
         if session.zoomedByUs {
             _ = try? gateway.run(PreviewClientInvocation.toggleZoomArguments(groupName: session.groupName))
+            muteActivity(paneID: session.paneID)
         }
         _ = try? gateway.run(PreviewClientInvocation.killGroupArguments(groupName: session.groupName))
     }
@@ -109,12 +131,24 @@ public struct PreviewClientLifecycle: Sendable {
     /// call did the zooming, so `teardownGroupSession` only ever undoes a zoom it caused
     /// itself. Never throws: a failed query or toggle just means the popup falls back to
     /// showing the whole tiled window, same as before this existed.
-    private func zoomIfNeeded(groupName: String) -> Bool {
+    private func zoomIfNeeded(groupName: String, paneID: String) -> Bool {
         guard let flag = try? gateway.run(PreviewClientInvocation.zoomedQueryArguments(groupName: groupName)),
               flag.trimmingCharacters(in: .whitespacesAndNewlines) != "1" else {
             return false
         }
-        return (try? gateway.run(PreviewClientInvocation.toggleZoomArguments(groupName: groupName))) != nil
+        guard (try? gateway.run(PreviewClientInvocation.toggleZoomArguments(groupName: groupName))) != nil else {
+            return false
+        }
+        muteActivity(paneID: paneID)
+        return true
+    }
+
+    /// Called immediately after a zoom toggle actually ran (in, at the end of `zoomIfNeeded`;
+    /// out, in `teardownGroupSession`) — never for a query/toggle that failed or a window that
+    /// was already zoomed, since neither of those changes what's on screen. See
+    /// `ActivityStateStore.muteOutput(paneId:until:)`'s doc comment for why this mute exists.
+    private func muteActivity(paneID: String) {
+        activityMuter?.muteOutput(paneId: paneID, until: clock().addingTimeInterval(Self.zoomActivityMuteWindow))
     }
 
     private struct WindowGeometry {

@@ -68,13 +68,20 @@ final class HoverPreviewController: NSResponder {
     private let ttyOwnerResolver: any TTYOwnerResolver
     private let switchPlanner: SwitchActionPlanner
     private let scriptRunner: any AppleScriptRunner
+    /// Forwarded to every `PreviewClient` this controller creates (`startPreview`), so its
+    /// `PreviewClientLifecycle` can mute the previewed pane's own zoom-induced repaint out of
+    /// activity tracking — see `ActivityStateStore.muteOutput(paneId:until:)`'s doc comment.
+    /// `nil` by default (matches every other collaborator's headless-testable default here):
+    /// a controller built without one just never mutes, same as before this existed.
+    private let activityMuter: (any ActivityMuter)?
 
     init(
         gateway: any TmuxGateway = ProcessTmuxGateway(),
         tmuxPath: String = TmuxCore.defaultTmuxPath,
         ttyOwnerResolver: any TTYOwnerResolver = ProcessTableTTYOwnerResolver(),
         switchPlanner: SwitchActionPlanner = SwitchActionPlanner(),
-        scriptRunner: any AppleScriptRunner = OSAScriptRunner()
+        scriptRunner: any AppleScriptRunner = OSAScriptRunner(),
+        activityMuter: (any ActivityMuter)? = nil
     ) {
         self.gateway = gateway
         self.tmuxPath = tmuxPath
@@ -83,6 +90,7 @@ final class HoverPreviewController: NSResponder {
         self.ttyOwnerResolver = ttyOwnerResolver
         self.switchPlanner = switchPlanner
         self.scriptRunner = scriptRunner
+        self.activityMuter = activityMuter
         super.init()
     }
 
@@ -209,7 +217,7 @@ final class HoverPreviewController: NSResponder {
     /// whatever was there before (`tileMouseEntered`'s second-Tile-hover path always calls
     /// `close()` before starting a new dwell) — so there's no old client to stop here first.
     private func startPreview(paneID: String, popup: HoverPreviewPopup) {
-        let client = PreviewClient()
+        let client = PreviewClient(activityMuter: activityMuter)
         previewClient = client
         client.onOutcome = { [weak self] outcome in
             switch outcome {
