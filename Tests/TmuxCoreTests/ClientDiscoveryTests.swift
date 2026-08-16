@@ -95,6 +95,30 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
         }
     }
 
+    /// Bug repro (EPIC-005 regression): `ControlModeActivitySource`'s pooled `tmux -C attach`
+    /// clients are real, attached tmux clients with no backing pty — `list-clients` reports them
+    /// with a blank `client_tty` (live-verified: `" t2q"`, leading space, session name only), not
+    /// as a malformed line. Before this fix, a blank tty threw on this `.map` pass, and since
+    /// `try? clientDiscovery.scan()` at the Switch call site turns any throw into `nil`, *every*
+    /// double-click's "focus existing window" search silently found nothing the moment any
+    /// session had a pooled control client — which, once TASK-029 wired the real stack in, is
+    /// effectively always. A blank-tty line must be skipped, and — the sharper regression this
+    /// guards against — must not also swallow the real terminal clients sharing the same
+    /// `list-clients` output.
+    @Test func scanSkipsControlModeClientsWithBlankTTYWithoutLosingRealClients() throws {
+        let (_, discovery) = makeDiscovery(output: [
+            "/dev/ttys056 widget-advisor",
+            " widget-advisor",
+            "/dev/ttys050 wgt",
+        ].joined(separator: "\n"))
+
+        let clients = try discovery.scan()
+
+        #expect(clients.count == 2)
+        #expect(clients.contains(ClientInfo(tty: "/dev/ttys056", sessionName: "widget-advisor")))
+        #expect(clients.contains(ClientInfo(tty: "/dev/ttys050", sessionName: "wgt")))
+    }
+
     /// Slice: tmux is invoked only via `TmuxGateway`, by resolved absolute path — never a bare
     /// `tmux` (CLAUDE.md) — and `list-clients` must run server-wide, not `-t`-scoped to one
     /// session (SPEC.md: never walk session-by-session). Mirrors

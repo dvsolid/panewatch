@@ -29,18 +29,34 @@ public struct ClientDiscovery: Sendable {
     /// contains a space, but a session name can, so splitting on the *first* space only keeps a
     /// spaced session name intact instead of truncating it.
     ///
-    /// Unlike `PaneDiscovery.parse` (where an empty `pane_title` is legitimate), both fields
-    /// here must be non-empty: an attached client always has a real tty and a real session name.
-    /// Without that check, a trailing-space line like `"/dev/ttys001 "` would slip past a naive
-    /// `fields.count == 2` test and parse into a `ClientInfo` with an empty `sessionName` — which
-    /// would make every *unattached* session look like it has a client attached at that tty.
+    /// A blank `tty` is skipped, not treated as malformed: `ControlModeActivitySource`'s pooled
+    /// `tmux -C attach` clients (TASK-029) are real, correctly-attached tmux clients with a
+    /// non-empty `client_session` but no backing pty, so `#{client_tty}` legitimately reports
+    /// empty for them — live-verified against a real tmux server (` <session>`, leading space,
+    /// one line per pooled control client, interleaved with real terminal clients in the same
+    /// `list-clients` output). Switch's "focus existing" search (`SwitchActionPlanner`) only
+    /// cares about clients backed by an actual terminal window, so these are simply not
+    /// candidates — but they must not poison the *whole* scan the way throwing on this `.map`
+    /// pass would: one skipped line here previously meant `try? clientDiscovery.scan()` at the
+    /// call site saw `nil` and silently gave up on every session, not just this one, making
+    /// double-click always fall through to "open new" the moment any control client was pooled.
+    ///
+    /// An empty `sessionName`, unlike `tty`, remains a genuine malformed-line signal: unlike
+    /// `PaneDiscovery.parse` (where an empty `pane_title` is legitimate), every attached client —
+    /// control-mode or not — always has a real session name. Without this check, a trailing-space
+    /// line like `"/dev/ttys001 "` would slip past a naive `fields.count == 2` test and parse
+    /// into a `ClientInfo` with an empty `sessionName` — which would make every *unattached*
+    /// session look like it has a client attached at that tty.
     static func parse(_ output: String) throws -> [ClientInfo] {
-        try output.split(separator: "\n", omittingEmptySubsequences: true).map { line in
+        var clients: [ClientInfo] = []
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
             let fields = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
-            guard fields.count == 2, !fields[0].isEmpty, !fields[1].isEmpty else {
+            guard fields.count == 2, !fields[1].isEmpty else {
                 throw ClientDiscoveryError.malformedLine(String(line))
             }
-            return ClientInfo(tty: String(fields[0]), sessionName: String(fields[1]))
+            guard !fields[0].isEmpty else { continue }
+            clients.append(ClientInfo(tty: String(fields[0]), sessionName: String(fields[1])))
         }
+        return clients
     }
 }
