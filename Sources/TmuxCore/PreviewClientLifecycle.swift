@@ -92,6 +92,25 @@ public struct PreviewClientLifecycle: Sendable {
     ///    because a failure here should degrade to that tiled view rather than fail the whole
     ///    preview.
     public func prepareGroupSession(paneID: String) throws -> GroupSession {
+        // Armed before any tmux command below runs, unconditionally — not just around the zoom
+        // toggle further down. `PreviewClient` (TmuxerApp) is about to attach its own read-only
+        // client to the group session this function builds, and that's a second, independent
+        // source of false activity: live-verified against a real tmux 3.6a server, a pane whose
+        // foreground program has an active terminal mode (Claude Code enables the Kitty
+        // keyboard protocol on start, `CSI > 1 u` / `CSI > 4;2 m`) gets that mode state replayed
+        // as a genuine `%output` the moment *any* new session/client touches its window — not
+        // only on the eventual client attach, but as early as `createGroupArguments`'s
+        // `new-session -t <paneID> ...` a few lines down. A Pi pane sharing the exact same
+        // window and sequence never produced this (confirmed live, same server, same moment):
+        // Pi doesn't enable that protocol, so there's no mode state to replay. Muting at the end
+        // of this function (an earlier version of this fix) left that `new-session` step's own
+        // replay unmuted — live-verified: the very first hover after a mute-at-the-end build
+        // still recorded real activity, with a *second*, later replay correctly suppressed —
+        // proving the race was real, not hypothetical. Muting here, before anything runs, is
+        // what closes it. Kept in `TmuxCore` rather than `PreviewClient` (TmuxerApp) so this
+        // stays fixture-testable.
+        muteActivity(paneID: paneID)
+
         let groupName = PreviewClientInvocation.groupSessionName(paneID: paneID)
         let geometry = try resolveWindowGeometry(paneID: paneID)
 
@@ -106,10 +125,12 @@ public struct PreviewClientLifecycle: Sendable {
             throw error
         }
 
+        let zoomedByUs = zoomIfNeeded(groupName: groupName, paneID: paneID)
+
         return GroupSession(
             paneID: paneID,
             groupName: groupName,
-            zoomedByUs: zoomIfNeeded(groupName: groupName, paneID: paneID),
+            zoomedByUs: zoomedByUs,
             windowHeight: geometry.windowHeight
         )
     }

@@ -221,9 +221,29 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
     /// The zoom toggle that isolates the previewed pane is a real, visible repaint (verified
     /// live against tmux — see `ActivityStateStore.muteOutput`'s doc comment) — `prepare` must
     /// mute it for exactly `zoomActivityMuteWindow` from the injected clock's `now`, not the
-    /// wall clock, so this stays deterministic.
+    /// wall clock, so this stays deterministic. A second, unconditional mute call for the
+    /// impending Preview Client attach (see `prepareGroupSession`'s doc comment) always follows
+    /// it, so this zoom-triggered case sees two calls, not one.
     @Test func prepareGroupSessionMutesActivityWhenItZooms() throws {
         let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        let muter = FakeActivityMuter()
+        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter, clock: { self.referenceDate })
+
+        _ = try lifecycle.prepareGroupSession(paneID: paneID)
+
+        #expect(muter.calls.count == 2)
+        #expect(muter.calls.allSatisfy { $0.paneId == paneID })
+        #expect(muter.calls.allSatisfy { $0.until == referenceDate.addingTimeInterval(TmuxCore.defaultProbeInterval + 2) })
+    }
+
+    /// The window came in already zoomed — no toggle ran, so the zoom-repaint mute doesn't
+    /// fire. The unconditional attach mute still does: `PreviewClient` is about to attach its
+    /// own client to this group session either way, live-verified to produce a genuine
+    /// `%output` for a pane like Claude Code's with an active terminal mode, regardless of
+    /// whether this `prepare` pass zoomed anything.
+    @Test func prepareGroupSessionDoesNotMuteForZoomWhenAlreadyZoomed() throws {
+        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
+        gateway.setResponse("1", for: PreviewClientInvocation.zoomedQueryArguments(groupName: groupName))
         let muter = FakeActivityMuter()
         let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter, clock: { self.referenceDate })
 
@@ -234,22 +254,10 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         #expect(muter.calls.first?.until == referenceDate.addingTimeInterval(TmuxCore.defaultProbeInterval + 2))
     }
 
-    /// The window came in already zoomed — no toggle ran, so nothing on screen actually
-    /// changed, so nothing should be muted.
-    @Test func prepareGroupSessionDoesNotMuteActivityWhenAlreadyZoomed() throws {
-        let gateway = makeGatewayWithExistingPane(windowIndex: 2)
-        gateway.setResponse("1", for: PreviewClientInvocation.zoomedQueryArguments(groupName: groupName))
-        let muter = FakeActivityMuter()
-        let lifecycle = PreviewClientLifecycle(gateway: gateway, activityMuter: muter)
-
-        _ = try lifecycle.prepareGroupSession(paneID: paneID)
-
-        #expect(muter.calls.isEmpty)
-    }
-
-    /// The zoom toggle itself failed (best-effort) — no real state change happened, so muting
-    /// here would only swallow genuine future output for no reason.
-    @Test func prepareGroupSessionDoesNotMuteActivityWhenTheZoomToggleFails() throws {
+    /// The zoom toggle itself failed (best-effort) — no real zoom-driven repaint happened, so
+    /// the zoom mute doesn't fire. The unconditional attach mute still does, for the same
+    /// reason as the already-zoomed case above.
+    @Test func prepareGroupSessionDoesNotMuteForZoomWhenTheZoomToggleFails() throws {
         let gateway = makeGatewayWithExistingPane(windowIndex: 2)
         gateway.fail(PreviewClientInvocation.toggleZoomArguments(groupName: groupName))
         let muter = FakeActivityMuter()
@@ -258,7 +266,8 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         let result = try lifecycle.prepareGroupSession(paneID: paneID)
 
         #expect(result.zoomedByUs == false)
-        #expect(muter.calls.isEmpty)
+        #expect(muter.calls.count == 1)
+        #expect(muter.calls.first?.paneId == paneID)
     }
 
     /// The mirror image: restoring zoom on the way out is just as real a repaint as zooming in,
