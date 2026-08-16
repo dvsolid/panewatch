@@ -62,7 +62,15 @@ public struct StatusBarEngine: Sendable {
         }
 
         topology.replace(with: panes)
-        activitySource.setWatchedPanes(Set(panes.map(\.id)))
+        // `reduce(into:)`, not `Dictionary(uniqueKeysWithValues:)` — the latter traps on a
+        // duplicate key. `AgentDetector` dedups by pane_id today (grouped-session collisions
+        // resolve to one winner), but a trapping initializer would turn any future weakening of
+        // that invariant into a hard crash on every `reconcile()` instead of a silently-kept
+        // first value.
+        let watchedPanes = panes.reduce(into: [String: String]()) { result, pane in
+            result[pane.id] = pane.sessionName
+        }
+        activitySource.setWatchedPanes(watchedPanes)
         return tiles(now: now)
     }
 

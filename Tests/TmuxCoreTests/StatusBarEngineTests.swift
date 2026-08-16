@@ -35,7 +35,11 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
 /// it here rather than poking `ActivityStateStore` directly.
 private final class FakeActivitySource: ActivitySource, @unchecked Sendable {
     var onOutput: ((String, Date) -> Void)?
-    func setWatchedPanes(_ paneIds: Set<String>) {}
+    /// Records whatever `setWatchedPanes` last received, so a test can assert the pane-id ->
+    /// session-name mapping `StatusBarEngine.reconcile()` builds (ADR-0004), not just that some
+    /// call happened.
+    private(set) var lastWatchedPanes: [String: String] = [:]
+    func setWatchedPanes(_ panes: [String: String]) { lastWatchedPanes = panes }
     func fireOutput(paneId: String, at date: Date) { onOutput?(paneId, date) }
 }
 
@@ -63,6 +67,12 @@ private func paneLine(
 private let claudeTaskOne = paneLine(id: "%1", paneIndex: 1, title: "✳ task-one", pid: 100)
 private let claudeTaskThree = paneLine(id: "%3", paneIndex: 3, title: "✳ task-three", pid: 300)
 private let piTaskTwo = paneLine(id: "%2", paneIndex: 2, command: "zsh", title: "π - proj", pid: 200)
+/// A second, distinct session — `claudeTaskOne`/`claudeTaskThree`/`piTaskTwo` all default to
+/// `session: "sess"`, which can't distinguish "the real session name" from "a hardcoded
+/// placeholder" (ADR-0004's regression risk this task guards against).
+private let claudeTaskFourInAnotherSession = paneLine(
+    id: "%4", session: "wgt", paneIndex: 1, title: "✳ task-four", pid: 400
+)
 
 /// TASK-013: title matches are now corroborated against a live agent descendant every
 /// `classify()` pass, so `AgentDetector`'s default `ProcessTableDescendantInspector` (a real
@@ -73,6 +83,7 @@ private let fakeDescendantInspector = FakeDescendantProcessInspector(argvByPID: 
     100: ["/usr/local/bin/claude"], // %1
     200: ["/usr/local/bin/pi"], // %2
     300: ["/usr/local/bin/claude"], // %3
+    400: ["/usr/local/bin/claude"], // %4
 ])
 
 private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
@@ -204,4 +215,20 @@ private func makeEngine(
     _ = engine.tiles()
     _ = engine.tiles()
     #expect(gateway.listPanesCallCount == 1)
+}
+
+/// Acceptance item 3 (ADR-0004): `reconcile()` passes `activitySource.setWatchedPanes` the real
+/// pane-id -> session-name mapping built from its `[AgentPane]` list, not a placeholder. Two
+/// panes in two distinct sessions (`sess`, `wgt`) so a placeholder like an empty string or a
+/// single hardcoded session name can't accidentally satisfy the assertion.
+@Test func reconcilePassesRealSessionNamesToActivitySource() throws {
+    let gateway = FakeTmuxGateway(
+        output: [claudeTaskOne, claudeTaskFourInAnotherSession].joined(separator: "\n")
+    )
+    let activitySource = FakeActivitySource()
+    let engine = makeEngine(gateway: gateway, activitySource: activitySource)
+
+    _ = try engine.reconcile()
+
+    #expect(activitySource.lastWatchedPanes == ["%1": "sess", "%4": "wgt"])
 }

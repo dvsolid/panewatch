@@ -40,7 +40,7 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
 /// and this file's tests care about discovery/label wiring, not phases.
 private final class NoOpActivitySource: ActivitySource, @unchecked Sendable {
     var onOutput: ((String, Date) -> Void)?
-    func setWatchedPanes(_ paneIds: Set<String>) {}
+    func setWatchedPanes(_ panes: [String: String]) {}
 }
 
 /// Every test wires the same fake-gateway-backed `PaneDiscovery`; only the spy test needs the

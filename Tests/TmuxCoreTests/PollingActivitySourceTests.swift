@@ -51,7 +51,7 @@ private let farProbeInterval: TimeInterval = 3600
 @Test func probeOnceCapturesEachWatchedPaneExactlyOnce() {
     let gateway = FakeTmuxGateway(output: ["%1": "hello", "%2": "world"])
     let source = PollingActivitySource(gateway: gateway, probeInterval: farProbeInterval)
-    source.setWatchedPanes(["%1", "%2"])
+    source.setWatchedPanes(["%1": "sess", "%2": "sess"])
 
     source.probeOnce()
 
@@ -65,7 +65,7 @@ private let farProbeInterval: TimeInterval = 3600
 @Test func firesOnOutputWhenConsecutiveHashesDiffer() {
     let gateway = FakeTmuxGateway(output: ["%1": "frame-1"])
     let source = PollingActivitySource(gateway: gateway, probeInterval: farProbeInterval)
-    source.setWatchedPanes(["%1"])
+    source.setWatchedPanes(["%1": "sess"])
 
     var firedPaneIds: [String] = []
     source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
@@ -79,4 +79,29 @@ private let farProbeInterval: TimeInterval = 3600
     gateway.output["%1"] = "frame-2"
     source.probeOnce() // changed output — fires
     #expect(firedPaneIds == ["%1"])
+}
+
+/// Item 2's behavior regression guard: `setWatchedPanes` still evicts a dropped pane's cached
+/// hash when fed the new `[String: String]` shape (derived from `Set(panes.keys)`), exactly as
+/// it did against the old `Set<String>` input. A pane that leaves the watched set and later
+/// rejoins must be treated as a fresh, un-diffed sample — never compared against content
+/// captured before it was dropped, even if that content changed while unwatched.
+@Test func rewatchingAPaneAfterDroppingItTreatsItAsAFreshSample() {
+    let gateway = FakeTmuxGateway(output: ["%1": "frame-1"])
+    let source = PollingActivitySource(gateway: gateway, probeInterval: farProbeInterval)
+    source.setWatchedPanes(["%1": "sess"])
+
+    var firedPaneIds: [String] = []
+    source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
+
+    source.probeOnce() // establishes a hash for "frame-1" — first sample, no fire
+    #expect(firedPaneIds.isEmpty)
+
+    source.setWatchedPanes([:]) // %1 drops out — its cached hash must be evicted
+    gateway.output["%1"] = "frame-2" // content changes while unwatched
+    source.setWatchedPanes(["%1": "sess"]) // %1 rejoins
+
+    source.probeOnce() // no prior hash survived the drop, so this is a fresh sample — no fire,
+    // even though "frame-2" differs from the last content seen before %1 was dropped
+    #expect(firedPaneIds.isEmpty)
 }

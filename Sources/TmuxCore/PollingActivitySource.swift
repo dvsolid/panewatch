@@ -65,9 +65,10 @@ public final class PollingActivitySource: ActivitySource, @unchecked Sendable {
         timer.cancel()
     }
 
-    public func setWatchedPanes(_ paneIds: Set<String>) {
+    public func setWatchedPanes(_ panes: [String: String]) {
         lock.lock()
         defer { lock.unlock() }
+        let paneIds = Set(panes.keys)
         watchedPaneIds = paneIds
         // Drop cached hashes for panes no longer watched, so a pane that leaves and later
         // rejoins the watched set is treated as a fresh, un-diffed sample rather than

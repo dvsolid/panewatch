@@ -33,6 +33,11 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
     public let taskText: String?
     /// Carried through from `RawPane.windowActivityAt` — see its doc comment.
     public let windowActivityAt: Date
+    /// Carried through from `RawPane.sessionName` — the same value `label` embeds, kept as its
+    /// own field so callers that need just the session (e.g. `StatusBarEngine.reconcile()`
+    /// building the `ActivitySource.setWatchedPanes` pane-id -> session-name map, ADR-0004)
+    /// don't have to parse it back out of `label`.
+    public let sessionName: String
 
     /// `label` is built from `windowIndex`/`paneIndex`, never `windowName` — SPEC §3.4: dotted
     /// window names make `window_name` ambiguous. `taskText` is only ever non-nil for
@@ -46,6 +51,7 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
         self.type = type
         label = "\(pane.sessionName):\(pane.windowIndex).\(pane.paneIndex)"
         windowActivityAt = pane.windowActivityAt
+        sessionName = pane.sessionName
         if type == .claudeCode && matchedTitle {
             taskText = String(pane.title.dropFirst(claudeCodeTitlePrefix.count))
         } else {
