@@ -449,14 +449,14 @@ tmux attach -t '<session>:<window_index>.<pane_index>'   # NEW client only
 
 ## Phases
 
-**Status:** Phases 1 and 2 are fully shipped, and Phase 3 mostly so (EPIC-001 through EPIC-005 in
+**Status:** Phases 1, 2, and 3 are fully shipped (EPIC-001 through EPIC-005 in
 `docs/project/epics/` are all `status: done`) — the bullets below describe built, live behavior,
-not a roadmap, **except** "Configurable tile sizes and probe intervals," which has no settings
-surface in `Sources/TmuxerApp` yet and remains open. Phase 4 is entirely unbuilt. Two of the
-post-ship bugfixes against this stack are captured inline above: window-scoped activity seeding
-(§2) and `ClientDiscovery` tolerating control-mode's blank-tty clients (§4). Two others —
-control-mode client-churn handling and hover-preview activity muting — are not, since both are
-Hover Preview Popup mechanics that §4 explicitly defers to that feature's own spec.
+not a roadmap. Tile sizes and probe intervals are fixed, not user-configurable — not a gap,
+a deliberate choice. Phase 4 is entirely unbuilt. Two of the post-ship bugfixes against this
+stack are captured inline above: window-scoped activity seeding (§2) and `ClientDiscovery`
+tolerating control-mode's blank-tty clients (§4). Two others — control-mode client-churn
+handling and hover-preview activity muting — are not, since both are Hover Preview Popup
+mechanics that §4 explicitly defers to that feature's own spec.
 
 ### Phase 1 — MVP (Core monitoring)
 - Menu bar app with vertical floating bar
@@ -480,7 +480,6 @@ Hover Preview Popup mechanics that §4 explicitly defers to that feature's own s
 - Animated fade transitions
 - Task name display
 - Hover tooltips with session details
-- Configurable tile sizes and probe intervals
 
 ### Phase 4 — Advanced features
 - Notifications on agent completion/failure
