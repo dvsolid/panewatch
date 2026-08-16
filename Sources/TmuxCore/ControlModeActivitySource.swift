@@ -26,10 +26,10 @@ import Foundation
 /// fires on that process's own delivery thread while `setWatchedPanes` and the `onOutput` setter
 /// may be called from another task, so `clientsBySession`, `watchedPaneIds`, `wantedSessions`,
 /// `lastFiredAt`, `outputHandler`, `failureHandler`, `reconcilePending`, `backoffAttempt`,
-/// `confirmedProcessIDs`, and `everConfirmed` — the only mutable stored state — are all read
-/// and written exclusively under `lock`. `launcher`, `tmuxPath`, `clock`, `coalesceInterval`,
-/// `scheduler`, and the backoff tuning constants are safe unguarded: all `let`-bound at `init`
-/// and never reassigned.
+/// `confirmedProcessIDs`, `confirmedAt`, and `everConfirmed` — the only mutable stored state —
+/// are all read and written exclusively under `lock`. `launcher`, `tmuxPath`, `clock`,
+/// `coalesceInterval`, `scheduler`, and the backoff tuning constants are safe unguarded: all
+/// `let`-bound at `init` and never reassigned.
 public final class ControlModeActivitySource: FailableActivitySource, @unchecked Sendable {
     private let launcher: any ControlModeProcessLauncher
     private let tmuxPath: String
@@ -39,6 +39,25 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
     private let reconnectInitialDelay: TimeInterval
     private let reconnectBackoffFactor: Double
     private let reconnectMaxDelay: TimeInterval
+
+    /// How long after this process's attach is (re)confirmed, or after any other control-mode
+    /// notification arrives for it (`handle`'s `.other` case), to suppress `onOutput` — long
+    /// enough to cover tmux replaying a pane's already-active terminal modes (e.g. Claude Code's
+    /// Kitty keyboard-protocol enable sequences, `CSI > 1 u` / `CSI > 4;2 m`) or, for a full
+    /// redraw, its entire current screen content, to *any* client sharing that pane as a genuine
+    /// `%output` — live-verified against a real tmux 3.6a server to arrive within ~100ms of the
+    /// triggering notification. Not just this process's own `%end`: an unrelated client attaching
+    /// to the same session (this adapter's own cold start racing another session's spawn, a
+    /// hover-preview's grouped-session create *or* teardown, a manual `tmux attach`) re-triggers
+    /// the exact same replay on an already-settled client, live-verified by attaching a third,
+    /// independent client to a session whose existing client had been settled for 9 minutes — it
+    /// received a fresh replay the instant the new client's `%client-session-changed` line landed.
+    /// Unlike `PreviewClientLifecycle`'s equivalent mute (paneId-scoped, armed only around its own
+    /// hover-preview attach), this covers every trigger generically because it reacts to the
+    /// notification *type*, not to who caused it. Short relative to `PreviewClientLifecycle`'s 7s
+    /// zoom mute — this only needs to outrun a single near-instant reply, not a
+    /// `DispatchSourceTimer`-paced probe cycle.
+    private static let postAttachSettleWindow: TimeInterval = 1.0
 
     private let lock = NSLock()
     private var clientsBySession: [String: any ControlModeProcess] = [:]
@@ -73,6 +92,17 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
     /// needs — once any session has proven it works, every later failure is this class's own
     /// retry-forever business (SPEC §3.2's supervision requirements), never reported again.
     private var everConfirmed = false
+    /// When `process` last saw `%end` (`.attachConfirmed`) or any other non-output control-mode
+    /// notification (`.other` — `%client-session-changed`, `%session-changed`, etc.) — never by
+    /// an `.output` event's own implicit `confirmAttach` call, and read by `handle` to suppress
+    /// the terminal-mode replay those notifications precede (see `postAttachSettleWindow`'s doc
+    /// comment). A pane's *own* first `.output` — the case where neither `%end` nor any other
+    /// notification arrived yet (an older tmux, TASK-029's `.output`-only confirmation path) —
+    /// must never be mistaken for settle-window noise just because some *other* pane in the same
+    /// session already confirmed moments earlier; anchoring strictly to notification lines, never
+    /// to an `.output` event, is what keeps that case safe. Removed alongside
+    /// `confirmedProcessIDs` at reap time for the same stale-identity reason.
+    private var confirmedAt: [ObjectIdentifier: Date] = [:]
 
     public var onOutput: ((String, Date) -> Void)? {
         get {
@@ -160,6 +190,7 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
                 // reused by a later, unrelated, genuinely-unconfirmed process and be misread as
                 // proof it worked.
                 confirmedProcessIDs.remove(ObjectIdentifier(process))
+                confirmedAt.removeValue(forKey: ObjectIdentifier(process))
             }
         }
         lock.unlock()
@@ -256,9 +287,11 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
         return min(reconnectInitialDelay * pow(reconnectBackoffFactor, Double(attempt)), reconnectMaxDelay)
     }
 
-    /// Parses one control-mode line. `.attachConfirmed` records `process`'s attach as proven
-    /// (TASK-029). For a watched pane's `.output` event (which also counts as proof the attach
-    /// works — see `confirmAttach`), coalesces to at most one `onOutput` firing per
+    /// Parses one control-mode line. `.attachConfirmed` (`%end`) records `process`'s attach as
+    /// proven (TASK-029) and anchors `confirmedAt` — the moment `postAttachSettleWindow` measures
+    /// from. For a watched pane's `.output` event (which also counts as proof the attach works —
+    /// see `confirmAttach` — but deliberately never *writes* `confirmedAt` itself, only reads it;
+    /// see that property's doc comment for why), coalesces to at most one `onOutput` firing per
     /// `coalesceInterval`. Leading-edge coalescing (throttle, not trailing debounce): the first
     /// event in a window fires immediately — required so Blinking reflects the *first* byte of a
     /// burst, not the byte 250ms later — and subsequent events within `coalesceInterval` of that
@@ -271,10 +304,28 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
         switch ControlModeProtocolParser.parse(line) {
         case .attachConfirmed:
             confirmAttach(for: process)
+            lock.lock()
+            confirmedAt[ObjectIdentifier(process)] = clock()
+            lock.unlock()
 
         case .output(let paneId):
-            confirmAttach(for: process)
             let now = clock()
+            confirmAttach(for: process)
+
+            // Post-attach settle window (see `postAttachSettleWindow`'s doc comment): this event
+            // arrived too soon after `%end` to trust as real pane output rather than tmux's own
+            // terminal-mode replay to the new client. `confirmedAt` is nil whenever `%end` never
+            // arrived for this process (or hasn't yet) — never suppresses in that case.
+            let confirmedRecently: Bool = {
+                lock.lock()
+                defer { lock.unlock() }
+                guard let confirmedAt = confirmedAt[ObjectIdentifier(process)] else { return false }
+                return now.timeIntervalSince(confirmedAt) < Self.postAttachSettleWindow
+            }()
+            if confirmedRecently {
+                return
+            }
+
             let handler: ((String, Date) -> Void)? = {
                 lock.lock()
                 defer { lock.unlock() }
@@ -287,7 +338,27 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
             }()
             handler?(paneId, now)
 
-        case .exit, .other:
+        case .other:
+            // Any notification that isn't a pane's own output (`%client-session-changed`,
+            // `%session-changed`, `%window-add`, etc.) re-arms the settle window — live-verified
+            // against real tmux 3.6a: attaching an unrelated *third* client to a session made an
+            // already-9-minutes-settled client see a fresh terminal-mode-replay `%output` for
+            // that session's Claude Code pane, broadcast the instant the new client's
+            // `%client-session-changed` line landed. tmux replays a pane's already-active
+            // terminal modes — and, for a hover-preview zoom or full redraw, its *entire current
+            // screen content* — to every client sharing that pane whenever *any* client
+            // (re)attaches, not just the newly-attaching one, so anchoring solely on this
+            // process's own `%end` (the original `postAttachSettleWindow` fix) only ever covered
+            // its first attach: any later hover, another `tmuxer-mac` instance, or a manual
+            // `tmux attach` on the same session reopened the same false-activity window with no
+            // protection at all. Reacting to the *notification type* here — never the pane
+            // payload itself (SPEC §230) — covers every one of those triggers generically instead
+            // of chasing each call site with its own mute.
+            lock.lock()
+            confirmedAt[ObjectIdentifier(process)] = clock()
+            lock.unlock()
+
+        case .exit:
             break
         }
     }
@@ -319,6 +390,7 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
         }
         clientsBySession.removeValue(forKey: session)
         let wasConfirmed = confirmedProcessIDs.remove(ObjectIdentifier(process)) != nil
+        confirmedAt.removeValue(forKey: ObjectIdentifier(process))
         let shouldReportFailure = !wasConfirmed && !everConfirmed
         let failureHandlerToCall = shouldReportFailure ? failureHandler : nil
         let shouldSchedule = !reconcilePending

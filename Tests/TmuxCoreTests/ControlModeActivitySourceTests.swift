@@ -264,16 +264,119 @@ private final class FakeClock: @unchecked Sendable {
         #expect(firedPaneIds == ["%1", "%2"])
     }
 
+    // MARK: - Post-attach settle window (tmux's terminal-mode replay must not read as real output)
+
+    /// Bug repro: live-verified against a real tmux 3.6a server that a pane whose foreground
+    /// program has an active terminal mode (Claude Code's Kitty keyboard-protocol enable
+    /// sequences) gets that mode state replayed as a genuine `%output` within ~100ms of `%end` —
+    /// on *every* attach this adapter makes, not only a short-lived hover-preview one. Left
+    /// unhandled, this painted every untouched Claude Code Tile active the instant this app
+    /// started watching its session. `%end` (`.attachConfirmed`) anchors the settle window;
+    /// an `.output` line arriving inside it must be dropped.
+    @Test func outputArrivingRightAfterAttachConfirmedIsSuppressed() {
+        let launcher = FakeControlModeProcessLauncher()
+        let clock = FakeClock()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", clock: clock.now
+        )
+        source.setWatchedPanes(["%1": "agents"])
+        let process = launcher.process(for: "agents")!
+
+        var firedPaneIds: [String] = []
+        source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
+
+        process.emit("%end 0 0 0")
+        process.emit("%output %1 \u{1B}[>1u") // tmux's terminal-mode replay, not real typing
+
+        #expect(firedPaneIds.isEmpty)
+    }
+
+    /// The mirror case: once the settle window has elapsed, `.output` is trusted again —
+    /// otherwise a session would be permanently deaf to its own panes after every attach.
+    @Test func outputArrivingAfterSettleWindowElapsesFiresNormally() {
+        let launcher = FakeControlModeProcessLauncher()
+        let clock = FakeClock()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", clock: clock.now
+        )
+        source.setWatchedPanes(["%1": "agents"])
+        let process = launcher.process(for: "agents")!
+
+        var firedPaneIds: [String] = []
+        source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
+
+        process.emit("%end 0 0 0")
+        clock.advance(by: 1.5) // past the 1.0s settle window
+        process.emit("%output %1 real typing")
+
+        #expect(firedPaneIds == ["%1"])
+    }
+
+    /// The specific regression a naive "mute every pane for a while after any confirmation"
+    /// implementation would reintroduce: `%1`'s own first `.output` (with no `%end` ever having
+    /// arrived for this process) is the sole confirmation event `%2` has to go on. `%2`'s
+    /// unrelated first `.output`, arriving right after, must still fire — it is not settle-window
+    /// noise from `%1`'s attach, since `%2` never had its own `%end` suppressed.
+    @Test func anotherPanesFirstOutputIsNotSuppressedByAConfirmationCreditedToADifferentPane() {
+        let launcher = FakeControlModeProcessLauncher()
+        let clock = FakeClock()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", clock: clock.now
+        )
+        source.setWatchedPanes(["%1": "agents", "%2": "agents"])
+        let process = launcher.process(for: "agents")!
+
+        var firedPaneIds: [String] = []
+        source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
+
+        process.emit("%output %1 a") // no %end ever arrived — this is %1's own confirmation
+        process.emit("%output %2 a") // must not be read as settle-window noise from %1's confirm
+
+        #expect(firedPaneIds == ["%1", "%2"])
+    }
+
+    /// Bug repro: live-verified against a real tmux 3.6a server that anchoring the settle window
+    /// solely to this process's own `%end` misses the far more common trigger — an *unrelated*
+    /// client attaching to the same session (another `tmuxer-mac` cold start, a hover-preview
+    /// grouped-session create or teardown, a manual `tmux attach`) rebroadcasts the same
+    /// terminal-mode replay to every client already watching that session, including one settled
+    /// minutes earlier. `%client-session-changed` (classified `.other`) is exactly the
+    /// notification live captures show landing right before that replay; an `.output` line
+    /// arriving inside the window it arms must be dropped the same way `%end`'s window is.
+    @Test func outputArrivingRightAfterAnotherClientsSessionChangeIsSuppressed() {
+        let launcher = FakeControlModeProcessLauncher()
+        let clock = FakeClock()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", clock: clock.now
+        )
+        source.setWatchedPanes(["%1": "agents"])
+        let process = launcher.process(for: "agents")!
+
+        var firedPaneIds: [String] = []
+        source.onOutput = { paneId, _ in firedPaneIds.append(paneId) }
+
+        process.emit("%end 0 0 0")
+        clock.advance(by: 5.0) // long settled — the original %end-anchored window is well past
+        process.emit("%client-session-changed client-99 $3 agents") // an unrelated client attached
+        process.emit("%output %1 \u{1B}[>1u") // the replay that broadcast triggers, not real typing
+
+        #expect(firedPaneIds.isEmpty)
+    }
+
     // MARK: - Acceptance item 6: `.exit`/`.other` never directly trigger `onOutput`
 
     /// Falsifiable against "onLine was never wired at all" (which would trivially pass a test
     /// that only emits `.exit`/`.other` and checks for zero fires): mixes `%exit` and an
-    /// unrecognized `%`-prefixed line in with one real `%output` for a watched pane, and asserts
-    /// that exactly the `%output` line produced a fire — proving `.exit`/`.other` were parsed and
-    /// deliberately dropped, not just never reaching the parser.
+    /// unrecognized `%`-prefixed line in with one real `%output` for a watched pane, past the
+    /// settle window `.other` now arms (see the `MARK` below), and asserts that exactly the
+    /// `%output` line produced a fire — proving `.exit`/`.other` were parsed and deliberately
+    /// dropped, not just never reaching the parser.
     @Test func exitAndOtherEventsNeverDirectlyTriggerOnOutput() {
         let launcher = FakeControlModeProcessLauncher()
-        let source = ControlModeActivitySource(launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux")
+        let clock = FakeClock()
+        let source = ControlModeActivitySource(
+            launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux", clock: clock.now
+        )
         source.setWatchedPanes(["%1": "agents"])
         let process = launcher.process(for: "agents")!
 
@@ -282,6 +385,7 @@ private final class FakeClock: @unchecked Sendable {
 
         process.emit("%exit")
         process.emit("%session-changed $0 agents") // unrecognized-as-output — classifies .other
+        clock.advance(by: 1.5) // past the 1.0s settle window .other just armed
         process.emit("%output %1 real output")
 
         #expect(firedPaneIds == ["%1"])
