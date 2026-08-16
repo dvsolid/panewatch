@@ -479,7 +479,9 @@ mechanics that §4 explicitly defers to that feature's own spec.
 ### Phase 3 — Rich UI
 - Animated fade transitions
 - Task name display
-- Hover tooltips with session details
+- Hover Preview Popup — not a text tooltip: a live, read-only terminal preview of the pane's
+  actual output, backed by a short-lived read-only tmux client (§4, EPIC-003, feature spec
+  `2026-08-14-tile-hover-preview-and-switch.md`)
 
 ### Phase 4 — Advanced features
 - Notifications on agent completion/failure
