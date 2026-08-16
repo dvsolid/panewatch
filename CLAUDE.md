@@ -22,7 +22,7 @@ command text, so a paraphrase silently misses the cache and re-runs the whole su
 Package.swift
 Sources/
   TmuxCore/      pure logic — discovery, parsing, agent detection, ActivitySource
-  TmuxerApp/     AppKit/SwiftUI shell (not yet created)
+  TmuxerApp/     AppKit/SwiftUI shell
 Tests/
   TmuxCoreTests/
 ```

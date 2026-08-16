@@ -111,7 +111,12 @@ If the descendant-process walk itself fails to run this pass (e.g. the `ps` snap
   `#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|#{window_activity}`
 - `window_activity` (epoch seconds of the window's last output) seeds a pane's `lastOutputAt` the
   first time `ActivityStateStore` sees it (§1) — tracked by the tmux server itself, so it survives
-  this app's own restarts, unlike a value derived from `Date()` at discovery time.
+  this app's own restarts, unlike a value derived from `Date()` at discovery time. **Caveat,
+  live-verified:** `window_activity` is scoped to the *window*, not the pane — every pane sharing
+  a window reports the identical epoch. Seeding is therefore only trustworthy when a pane is
+  alone in its window; a pane with a sibling (another agent, or a plain shell) is left unseeded
+  and starts `.idle`, self-correcting on its own first real `onOutput` instead of inheriting a
+  sibling's activity as a false positive.
 - Re-scan every `discoveryInterval` (30s) and reconcile against cached state by `pane_id`.
 - Descendant-process inspection (ladder step 2) is the only expensive step. This caching applies only to its use as the ladder step 3 *fallback* (a title-less or excluded pane, resolved once and memoized): run it once per newly-seen `pane_id` and cache the result for the pane's lifetime. Its use as ladder step 1's *corroboration* check is deliberately **not** cached — a title match is re-walked every discovery pass, since the question there ("is the agent that set this title still alive") can change pass to pass even though the pane's identity doesn't. Both uses still batch into the same single `ps -A` spawn per discovery pass (one process-table snapshot serves every pid needing a walk that pass, regardless of which ladder step asked).
 
@@ -135,18 +140,20 @@ When a pane surfaces under multiple grouped sessions, pick one session name for 
 
 ### 3. Activity Detection
 
-Activity detection sits behind a protocol seam with two implementations. The polling source ships in Phase 1 because it is trivial; the event-driven source replaces it in Phase 2 and is strictly better. **Nothing above this layer may know which source is in use.**
+Activity detection sits behind a protocol seam with two implementations. The polling source ships in Phase 1 because it is trivial; the event-driven source is added in Phase 2 as the preferred source, not a replacement — shipped composition (`FallbackActivitySource`, feature spec `2026-08-15-control-mode-activity-source.md` §Architecture, TASK-028/029) runs §3.2 as `primary` and §3.1 as `secondary`, latching to polling permanently the first time control-mode reports `onFailure` (no flapping back). **Nothing above this layer may know which source is in use**, including whether a fallback has occurred.
 
 ```swift
-protocol ActivitySource: AnyObject {
-    /// Panes to watch. Called on every discovery pass; implementations
-    /// diff against their current set and attach/detach as needed.
-    func setWatchedPanes(_ paneIds: Set<String>)
+protocol ActivitySource: AnyObject, Sendable {
+    /// Panes to watch, keyed by pane id, valued by session name (ADR-0004 — adapters that
+    /// attach per session, e.g. `ControlModeActivitySource`, need the session name;
+    /// `PollingActivitySource` only needs the keys). Called on every discovery pass;
+    /// implementations diff against their current set and attach/detach as needed.
+    func setWatchedPanes(_ panes: [String: String])
 
-    /// Fires when a pane produces output. Coalesced to at most one event
-    /// per pane per 250ms so a chatty repaint cannot flood the UI.
-    /// (250ms is a starting design choice, not a measured figure — tune
-    /// once the control-mode source is running against real agents.)
+    /// Fires when a pane produces output. `ControlModeActivitySource` coalesces this to at
+    /// most one event per pane per 250ms so a chatty repaint cannot flood the UI (250ms is a
+    /// starting design choice, not a measured figure); the guarantee is that adapter's, not
+    /// the protocol's — `PollingActivitySource` is bounded by `probeInterval` instead.
     var onOutput: ((_ paneId: String, _ at: Date) -> Void)? { get set }
 }
 ```
@@ -201,7 +208,10 @@ Usefully, Claude Code's working spinner ticks its elapsed counter every second, 
 - The residual risk runs the *other* way from the repaint concern: an agent that is genuinely busy while its visible screen stays static reads as idle. Claude Code's spinner covers this case; an agent without a live progress indicator would not be covered.
 - Hashing only sees the visible screen, so output that scrolls past between samples is counted once, not proportionally.
 
-All three disappear under §3.2, which observes bytes rather than screen states.
+All three disappear under §3.2, which observes bytes rather than screen states — but this source
+is still live in production as `FallbackActivitySource`'s permanent `secondary`, not retired:
+these limitations reapply for the rest of an app session the moment control-mode's `onFailure`
+fires once.
 
 #### 3.2 `ControlModeActivitySource` (Phase 2) — the real design
 
@@ -237,6 +247,14 @@ This is verified behaviour on tmux 3.6a, not a proposal.
 - The client terminates if its stdin closes. Hold stdin open for the process lifetime; do not connect it to a pipe that can drain. *(This is a real failure mode — the first attempt at verifying this design saw the client exit with `%exit` immediately for exactly this reason.)*
 - Parse the protocol line-wise and tolerate unknown `%`-prefixed notifications; tmux adds new ones between versions.
 
+**Failure composes with §3.1, it doesn't retire it.** Shipped as `FallbackActivitySource`
+(feature spec `2026-08-15-control-mode-activity-source.md` §Architecture, TASK-028/029): this
+source is `primary`, `PollingActivitySource` is `secondary`, and
+an irrecoverable failure here (surfaced via `FailableActivitySource.onFailure`, e.g. an old tmux
+rejecting `-f` flags) latches the whole app to polling for the rest of the session — no flapping
+back once switched. `StatusBarEngine` and everything above it holds only `any ActivitySource` and
+never knows which side is live.
+
 #### 3.3 The alternate screen (corrects a misdiagnosis)
 
 An earlier investigation attributed empty `capture-pane` output to **vi mode** in Claude Code. That diagnosis is wrong. All three Claude Code panes on the reference machine capture their full visible content, and all three report `pane_in_mode=0`.
@@ -271,6 +289,9 @@ behavior; this section covers only what double-click does:
      Terminal.app), then use that app's own AppleScript scripting dictionary to select the
      matching window/tab and activate it (ADR-0002). This requires the standard per-app
      Automation (TCC) permission prompt, not Accessibility — see §5 below.
+   - `list-clients`'s parser must tolerate a blank `client_tty` — the §3.2 control-mode pool's
+     own clients report one, and a strict parser that rejects it silently drops every real
+     client from the scan, breaking this whole path (fixed in `ClientDiscovery`, EPIC-005).
    - **Do not use `attach` on this path.** `attach` always creates an *additional* client rather than focusing the existing one, leaving the user with two clients fighting over the same session. `select-window`/`select-pane` retarget the client that is already there.
 2. **Open a new terminal** — when the session has no attached client, the owning app isn't one
    of the three supported terminals, or the Automation permission prompt above is denied:
@@ -427,6 +448,15 @@ tmux attach -t '<session>:<window_index>.<pane_index>'   # NEW client only
 - **Not an agent:** `pane_title` equal to the hostname (`HOSTX7K2Q9`) — tmux's default when nothing set a title.
 
 ## Phases
+
+**Status:** Phases 1 and 2 are fully shipped, and Phase 3 mostly so (EPIC-001 through EPIC-005 in
+`docs/project/epics/` are all `status: done`) — the bullets below describe built, live behavior,
+not a roadmap, **except** "Configurable tile sizes and probe intervals," which has no settings
+surface in `Sources/TmuxerApp` yet and remains open. Phase 4 is entirely unbuilt. Two of the
+post-ship bugfixes against this stack are captured inline above: window-scoped activity seeding
+(§2) and `ClientDiscovery` tolerating control-mode's blank-tty clients (§4). Two others —
+control-mode client-churn handling and hover-preview activity muting — are not, since both are
+Hover Preview Popup mechanics that §4 explicitly defers to that feature's own spec.
 
 ### Phase 1 — MVP (Core monitoring)
 - Menu bar app with vertical floating bar
