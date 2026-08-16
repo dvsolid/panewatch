@@ -452,8 +452,11 @@ tmux attach -t '<session>:<window_index>.<pane_index>'   # NEW client only
 **Status:** Phases 1, 2, and 3 are fully shipped (EPIC-001 through EPIC-005 in
 `docs/project/epics/` are all `status: done`) — the bullets below describe built, live behavior,
 not a roadmap. Tile sizes and probe intervals are fixed, not user-configurable — not a gap,
-a deliberate choice. Phase 4 is entirely unbuilt. Two of the post-ship bugfixes against this
-stack are captured inline above: window-scoped activity seeding (§2) and `ClientDiscovery`
+a deliberate choice. Phase 4 is entirely unbuilt and demoted to a future/suggested backlog,
+not a committed roadmap item — deprioritized 2026-08-16 in favor of continuing Phase 3's
+Hover Preview Popup with interactive input (see feature spec once brainstormed). Two of the
+post-ship bugfixes against this stack are captured inline above: window-scoped activity
+seeding (§2) and `ClientDiscovery`
 tolerating control-mode's blank-tty clients (§4). Two others — control-mode client-churn
 handling and hover-preview activity muting — are not, since both are Hover Preview Popup
 mechanics that §4 explicitly defers to that feature's own spec.
@@ -486,7 +489,7 @@ mechanics that §4 explicitly defers to that feature's own spec.
   actual output, backed by a short-lived read-only tmux client (§4, EPIC-003, feature spec
   `2026-08-14-tile-hover-preview-and-switch.md`)
 
-### Phase 4 — Advanced features
+### Phase 4 — Future / suggested (not committed, not scheduled)
 - Notifications on agent completion/failure
 - Quick search/filter sessions
 - Keyboard shortcuts
