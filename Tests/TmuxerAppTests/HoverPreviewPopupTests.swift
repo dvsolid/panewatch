@@ -84,6 +84,26 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         #expect(popup.chipScrollView.documentVisibleRect.contains(overflowMarker.frame))
     }
 
+    /// The "Ping" chip is the one deliberate exception to "the chip's title is the exact text
+    /// sent": it displays "Ping" but its click must send lowercase "ping" — regression coverage
+    /// for `handleChipClicked` preferring `HoverBackgroundButton.payloadText` over `sender.title`
+    /// when set. "Ping" is `quickReplyChips`' last entry, so it's the chip rail's last subview.
+    @Test func pingChipDisplaysTitleCaseButSendsLowercasePayload() throws {
+        let popup = HoverPreviewPopup()
+        var sent: [String] = []
+        popup.onSubmitInlineReply = { sent.append($0) }
+
+        let pingChip = try #require(
+            popup.chipScrollView.documentView?.subviews.last as? HoverBackgroundButton,
+            "chip rail's last subview should be the Ping chip"
+        )
+        #expect(pingChip.title == "Ping")
+
+        pingChip.performClick(nil)
+
+        #expect(sent == ["ping"])
+    }
+
     // MARK: - TASK-034: focus tracking via first-responder, not begin-editing
 
     /// `makeFirstResponder(_:)` is the seam the fix drives `onInlineReplyFieldFocusChanged`

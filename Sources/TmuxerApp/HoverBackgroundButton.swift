@@ -7,6 +7,11 @@ import AppKit
 /// a solid layer color gives full control over resting/hover fill and corner radius rather than
 /// fighting a system bezel's own drawing.
 final class HoverBackgroundButton: NSButton {
+    /// Optional override for what this button's click should actually send, when it differs
+    /// from the displayed `title` (e.g. a chip labeled "Ping" that sends lowercase "ping").
+    /// `nil` means "send the title as-is" — the common case.
+    var payloadText: String?
+
     var restingColor: NSColor = NSColor.white.withAlphaComponent(0.08) {
         didSet { updateBackgroundColor() }
     }

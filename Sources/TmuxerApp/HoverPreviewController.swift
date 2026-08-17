@@ -753,7 +753,13 @@ final class HoverPreviewPopup: NSPanel {
     /// deletion test as an independent module). Order is the task's own acceptance-item order.
     /// "Continue"/"Stop" were dropped as redundant with "Go on"/"No" — visual cleanup after
     /// user feedback that the eight-chip rail read as cluttered and overflowed its rail.
-    private static let quickReplyChips = ["Yes", "OK", "Go on", "Looks good", "Approved", "No"]
+    /// `label` is what the chip displays; `text` is what's actually sent (`handleChipClicked`).
+    /// Identical for every chip except "Ping", which sends lowercase "ping" — a deliberate,
+    /// user-requested exception to the "title is the payload" rule the other chips follow.
+    private static let quickReplyChips: [(label: String, text: String)] = [
+        ("Yes", "Yes"), ("OK", "OK"), ("Go on", "Go on"), ("Looks good", "Looks good"),
+        ("Approved", "Approved"), ("No", "No"), ("Ping", "ping")
+    ]
 
     /// Holds whichever of `showTerminal(_:)`/`showUnavailable()` is currently displayed, so
     /// swapping between them is just "remove this container's subviews, add the new one" —
@@ -772,12 +778,14 @@ final class HoverPreviewPopup: NSPanel {
     /// how `PreviewClient`'s own AppKit internals are already tested).
     let inputField: NSTextField
     private let sendButton: NSButton
-    /// TASK-033: one button per `quickReplyChips` entry, in order — its `title` is always the
-    /// chip's exact fixed text, which is also the exact string sent (`handleChipClicked`), so
-    /// there's no separate lookup table that could drift out of sync with what's on screen.
+    /// TASK-033: one button per `quickReplyChips` entry, in order. For most chips the displayed
+    /// label and the sent text are identical (`handleChipClicked` reads `sender.title` with no
+    /// lookup table to drift out of sync). "Ping" is the one deliberate exception — the button
+    /// reads "Ping" but sends lowercase "ping" — so each chip also carries its payload text on
+    /// `HoverBackgroundButton.payloadText`, which `handleChipClicked` prefers when present.
     /// Stored (not just built and forgotten) so `setInlineReplyEnabled` can disable them
     /// alongside the field/Send button.
-    private let chipButtons: [NSButton]
+    private let chipButtons: [HoverBackgroundButton]
     /// The chip rail's clipping/scrolling container (whole-branch review fix for TASK-033's
     /// overflow bug, below). Not `private` for the same test-seam reason as `inputField`: a test
     /// needs to inspect `documentView`/`hasHorizontalScroller`/`documentVisibleRect` directly
@@ -891,9 +899,9 @@ final class HoverPreviewPopup: NSPanel {
         let chipHeight: CGFloat = 22
         let chipHorizontalPadding: CGFloat = 10
         var chipX: CGFloat = 0
-        var chipButtons: [NSButton] = []
-        for chipText in Self.quickReplyChips {
-            let attributedTitle = NSAttributedString(string: chipText, attributes: [
+        var chipButtons: [HoverBackgroundButton] = []
+        for entry in Self.quickReplyChips {
+            let attributedTitle = NSAttributedString(string: entry.label, attributes: [
                 .font: chipFont,
                 .foregroundColor: chipTextColor
             ])
@@ -907,6 +915,7 @@ final class HoverPreviewPopup: NSPanel {
             chip.attributedTitle = attributedTitle
             chip.attributedAlternateTitle = attributedTitle
             chip.alignment = .center
+            chip.payloadText = entry.text
             chipX = chip.frame.maxX + Self.chipSpacing
             chipButtons.append(chip)
         }
@@ -1071,13 +1080,16 @@ final class HoverPreviewPopup: NSPanel {
         submitInlineReply()
     }
 
-    /// TASK-033: fires an Inline Reply with the clicked chip's exact fixed text (`sender.title`
-    /// is always one of `quickReplyChips`, unmodified) — no typing, and no interaction with
-    /// `inputField` at all, unlike `submitInlineReply()`. Reuses the same
-    /// `onSubmitInlineReply` closure `HoverPreviewController.performInlineReply` is wired to
-    /// (TASK-032): no new send path, no new pure logic, per this task's slice.
+    /// TASK-033: fires an Inline Reply with the clicked chip's fixed payload text — `payloadText`
+    /// when the chip set one (currently only "Ping", which sends lowercase "ping" rather than
+    /// its displayed label), falling back to `sender.title` for every other chip, where label
+    /// and payload are identical by construction. No typing, and no interaction with `inputField`
+    /// at all, unlike `submitInlineReply()`. Reuses the same `onSubmitInlineReply` closure
+    /// `HoverPreviewController.performInlineReply` is wired to (TASK-032): no new send path, no
+    /// new pure logic, per this task's slice.
     @objc private func handleChipClicked(_ sender: NSButton) {
-        onSubmitInlineReply?(sender.title)
+        let text = (sender as? HoverBackgroundButton)?.payloadText ?? sender.title
+        onSubmitInlineReply?(text)
     }
 
     private func submitInlineReply() {

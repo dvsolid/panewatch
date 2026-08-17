@@ -45,9 +45,11 @@ import Testing
     /// through the same builder unchanged, one call site reusing this task's existing pure
     /// logic — no per-chip escaping or splitting. The two multi-word entries ("Go on", "Looks
     /// good") are the load-bearing cases here: each must land as a single trailing array
-    /// element, not split into separate arguments on the internal space.
+    /// element, not split into separate arguments on the internal space. These are the *payload*
+    /// texts actually sent — "ping" (lowercase), not the "Ping" chip's displayed label, since
+    /// that one chip's label and payload deliberately differ.
     @Test func literalTextArgumentsRoundTripsEveryQuickReplyChipUnchanged() {
-        let chips = ["Yes", "OK", "Go on", "Looks good", "Approved", "No"]
+        let chips = ["Yes", "OK", "Go on", "Looks good", "Approved", "No", "ping"]
         for chip in chips {
             #expect(InlineReplyInvocation.literalTextArguments(paneId: "%51", text: chip) == [
                 "send-keys", "-t", "%51", "-l", "--", chip
