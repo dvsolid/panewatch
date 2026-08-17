@@ -47,7 +47,7 @@ import Testing
     /// good") are the load-bearing cases here: each must land as a single trailing array
     /// element, not split into separate arguments on the internal space.
     @Test func literalTextArgumentsRoundTripsEveryQuickReplyChipUnchanged() {
-        let chips = ["Yes", "OK", "Continue", "Go on", "Looks good", "Approved", "No", "Stop"]
+        let chips = ["Yes", "OK", "Go on", "Looks good", "Approved", "No"]
         for chip in chips {
             #expect(InlineReplyInvocation.literalTextArguments(paneId: "%51", text: chip) == [
                 "send-keys", "-t", "%51", "-l", "--", chip

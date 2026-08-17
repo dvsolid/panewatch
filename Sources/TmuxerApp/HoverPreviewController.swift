@@ -743,12 +743,14 @@ final class HoverPreviewPopup: NSPanel {
     /// keeps this "usable minimum width" at the row's tail alongside Send, rather than the
     /// field stretching to fill whatever space chips don't use.
     private static let footerFieldWidth: CGFloat = 160
-    private static let chipSpacing: CGFloat = 6
+    private static let chipSpacing: CGFloat = 4
     /// TASK-033: the fixed, non-configurable Quick Reply set (feature spec "Implementation
     /// decisions") — a plain constant with one call site (this popup's chip rail), not a
     /// `TmuxCore` module (feature spec §Architecture "Deliberately not proposed": it fails the
     /// deletion test as an independent module). Order is the task's own acceptance-item order.
-    private static let quickReplyChips = ["Yes", "OK", "Continue", "Go on", "Looks good", "Approved", "No", "Stop"]
+    /// "Continue"/"Stop" were dropped as redundant with "Go on"/"No" — visual cleanup after
+    /// user feedback that the eight-chip rail read as cluttered and overflowed its rail.
+    private static let quickReplyChips = ["Yes", "OK", "Go on", "Looks good", "Approved", "No"]
 
     /// Holds whichever of `showTerminal(_:)`/`showUnavailable()` is currently displayed, so
     /// swapping between them is just "remove this container's subviews, add the new one" —
@@ -856,20 +858,21 @@ final class HoverPreviewPopup: NSPanel {
         // Each chip button's title is the exact fixed text `handleChipClicked` sends — laid out
         // left-to-right in `quickReplyChips`' order inside `chipContent`, whose width is the sum
         // of every button's natural (`sizeToFit`) width plus spacing. `chipScrollView` clips
-        // that to `chipRailWidth`; when the content is wider than the rail, scrolling (trackpad/
-        // scroll-wheel) reaches the rest instead of wrapping or clipping them away (acceptance
-        // item 3) — `NSClipView` respects scroll gestures regardless of scroller visibility, but
-        // the eight fixed chips at their natural widths measurably overflow `chipRailWidth`
-        // (whole-branch review finding), so `hasHorizontalScroller = true` with `scrollerStyle =
-        // .overlay` makes that overflow *discoverable and reachable*: an overlay scroller
-        // auto-hides and consumes no layout space, so the rail still reads as a clean single row
-        // until the user actually scrolls it. `hasVerticalScroller` stays `false` — this rail
-        // never scrolls vertically.
+        // that to `chipRailWidth`; if the content is ever wider than the rail (e.g. the catalog
+        // grows again), scrolling (trackpad/scroll-wheel) reaches the rest instead of wrapping or
+        // clipping them away (acceptance item 3) — `hasHorizontalScroller = true` with
+        // `scrollerStyle = .overlay` makes that overflow *discoverable and reachable*: an overlay
+        // scroller auto-hides and consumes no layout space, so the rail still reads as a clean
+        // single row until the user actually scrolls it. `hasVerticalScroller` stays `false` —
+        // this rail never scrolls vertically. `.inline` bezel renders as the flat, low-profile
+        // suggestion pill AppKit uses for Mail/Messages smart replies — a closer visual match for
+        // "quick reply chip" than the default `.rounded` push-button bezel, which read as heavy,
+        // bordered buttons crowding a compact footer row.
         var chipX: CGFloat = 0
         var chipButtons: [NSButton] = []
         for chipText in Self.quickReplyChips {
             let chip = NSButton(title: chipText, target: nil, action: nil)
-            chip.bezelStyle = .rounded
+            chip.bezelStyle = .inline
             chip.controlSize = .small
             chip.font = .systemFont(ofSize: 11)
             chip.sizeToFit()

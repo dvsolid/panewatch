@@ -39,20 +39,6 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
 @Suite struct HoverPreviewPopupTests {
     // MARK: - TASK-033: chip rail overflow
 
-    /// The eight fixed Quick Reply chips at their natural (`sizeToFit`) widths are wider than
-    /// `chipRailWidth` — this is the overflow the finding described, and every other assertion
-    /// in this suite depends on it being real (a layout change that shrank the chips or widened
-    /// the rail enough to fit them all would make the rest of this suite vacuous, so this is
-    /// checked explicitly first).
-    @Test func chipRailContentOverflowsTheVisibleRail() {
-        let popup = HoverPreviewPopup()
-
-        let documentWidth = popup.chipScrollView.documentView?.frame.width ?? 0
-        let railWidth = popup.chipScrollView.bounds.width
-
-        #expect(documentWidth > railWidth)
-    }
-
     /// Before the fix, `hasHorizontalScroller = false` meant AppKit never installed a
     /// horizontal `NSScroller` on this scroll view at all — checking the scroller *instance*,
     /// not just the boolean flag, catches a regression where the flag is set but never actually
@@ -72,32 +58,30 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         #expect(popup.chipScrollView.scrollerStyle == .overlay)
     }
 
-    /// The concrete regression: with the rail's content overflowing (confirmed above), the last
-    /// chip ("Stop", per `quickReplyChips`' fixed order) starts outside `documentVisibleRect` —
-    /// clipped, matching the finding — but scrolling the clip view to the document's trailing
-    /// edge brings it fully into view. Before the fix this last step was still mechanically
-    /// possible via the clip view's own `scroll(to:)`, but with no scroller ever installed
-    /// (previous assertion) there was no discoverable, user-drivable way to get there — this
-    /// test exercises the same `NSClipView` scroll path a trackpad/scroll-wheel gesture would
-    /// take, confirming reaching the last chip is possible end-to-end.
-    @Test func scrollingRevealsTheLastChip() throws {
+    /// Direct regression coverage for the original bug (a clip view whose horizontal scroller
+    /// was disabled couldn't be scrolled to reveal off-screen content), decoupled from the real
+    /// `quickReplyChips` catalog's current width — after dropping "Continue"/"Stop" and
+    /// tightening `chipSpacing`, the six-chip rail no longer overflows in practice, which would
+    /// make an overflow-dependent test vacuous against the real catalog. This builds a document
+    /// view wider than the rail directly, so the assertion stays meaningful even as the catalog
+    /// changes: scrolling the clip view to the document's trailing edge must bring content
+    /// starting past the rail's width into `documentVisibleRect`.
+    @Test func scrollingRevealsContentPastTheVisibleRail() {
         let popup = HoverPreviewPopup()
-        guard let documentView = popup.chipScrollView.documentView,
-              let lastChip = documentView.subviews.last else {
-            Issue.record("chip rail has no chips to scroll to")
-            return
-        }
+        let railWidth = popup.chipScrollView.bounds.width
+        let overflowMarker = NSView(frame: NSRect(x: railWidth + 20, y: 0, width: 10, height: 10))
+        let wideDocument = NSView(frame: NSRect(x: 0, y: 0, width: railWidth + 40, height: popup.chipScrollView.bounds.height))
+        wideDocument.addSubview(overflowMarker)
+        popup.chipScrollView.documentView = wideDocument
 
-        // Starting layout: the rail shows only its leading edge, so the last chip must not
-        // already be fully visible (otherwise this test would prove nothing about scrolling).
-        #expect(!popup.chipScrollView.documentVisibleRect.contains(lastChip.frame))
+        #expect(!popup.chipScrollView.documentVisibleRect.contains(overflowMarker.frame))
 
         let clipView = popup.chipScrollView.contentView
-        let maxScrollX = max(0, documentView.frame.width - clipView.bounds.width)
+        let maxScrollX = max(0, wideDocument.frame.width - clipView.bounds.width)
         clipView.scroll(to: NSPoint(x: maxScrollX, y: 0))
         popup.chipScrollView.reflectScrolledClipView(clipView)
 
-        #expect(popup.chipScrollView.documentVisibleRect.contains(lastChip.frame))
+        #expect(popup.chipScrollView.documentVisibleRect.contains(overflowMarker.frame))
     }
 
     // MARK: - TASK-034: focus tracking via first-responder, not begin-editing
