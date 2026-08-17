@@ -18,3 +18,7 @@ docs/project/
 
 # Local qtc-dev workflow tooling (skills, agents, hooks) — kept locally, not published.
 .claude/
+
+# Internal qtc-dev/Ralph notes (gate-cache mechanics, repo state) — kept locally, not published.
+# Claude Code loads this automatically alongside CLAUDE.md.
+CLAUDE.local.md

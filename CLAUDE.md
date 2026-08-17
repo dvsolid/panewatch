@@ -6,15 +6,14 @@ it records which behaviours were verified against a live tmux server and which a
 
 ## Test commands
 
-The `qtc-dev-*` skills read this table. `execute-task`, `simplify`, and `verify` must all pass
-the **same literal string** to `append_review.py gate` — the gate cache is keyed on exact
-command text, so a paraphrase silently misses the cache and re-runs the whole suite.
-
 | Purpose | Command |
 |---|---|
-| **Full suite (the gate command)** | `swift test` |
+| Full suite | `swift test` |
 | Focused (one suite, during red→green) | `swift test --filter <Suite>.<Case>` |
 | Build with warnings as errors | `swift build -Xswiftc -warnings-as-errors` |
+| Lint | `docker run --rm -v "$PWD:/work" -w /work ghcr.io/realm/swiftlint:0.65.0 lint --strict` |
+
+Lint runs via Docker rather than a local SwiftLint install — see Toolchain below.
 
 ## Layout
 
@@ -33,20 +32,24 @@ Tests/
 ## Toolchain
 
 - Swift 6.0.3, strict concurrency. Target platform `.macOS(.v14)`.
-- **No full Xcode on this machine** — Command Line Tools only, so `xcodebuild` is unavailable.
-  SPM is the only build path; don't propose `.xcodeproj` or XCUITest workflows.
-- Python 3 is required by the `qtc-dev-*` vault scripts.
+- Building with Command Line Tools only (no full Xcode)? `xcodebuild` is unavailable — SPM is
+  the only build path; don't propose `.xcodeproj` or XCUITest workflows.
+- SwiftLint via Homebrew can fail to run on a Command Line Tools-only install: it dlopens
+  `sourcekitdInProc.framework` at startup, and that load fails outside a full Xcode.app (the
+  framework itself is present and loadable — this is specifically SourceKitten's
+  `@rpath`-dependent loader). Run it via the Docker image instead (see the Lint row above); CI
+  does the same, on a separate `ubuntu-latest` job, since GitHub's hosted macOS runners can't run
+  Docker at all.
 
 ## tmux
 
-- Never invoke bare `tmux` — the user's interactive `tmux` is a zsh plugin alias that fails to
-  resolve non-interactively. Resolve the binary explicitly (`/opt/homebrew/bin/tmux` here).
+- Never invoke bare `tmux` — an interactive shell's `tmux` can be aliased (e.g. by a zsh plugin)
+  in a way that doesn't resolve non-interactively. `TmuxCore.resolveTmuxPath()` picks the binary
+  from a fixed candidate list instead of a `PATH` search, so the alias is never in play.
 - Tests must not depend on live tmux sessions. Shell out through an injectable command runner
   so the real binary can be faked; skip explicitly when tmux is absent.
 - `pane_id` (`%51`) is the only stable identity for a pane. Never key on `session:window.pane`.
 
 ## Repo conventions
 
-- No remote. Ralph's whole-branch review uses `RUN_START_SHA...HEAD`, never `origin/main`.
-- `docs/project/` is the qtc-dev vault: gitignored operational state, never staged.
-- Stage source explicitly (`git add -- Sources/ Tests/ Package.swift`). Never `git add -A`.
+- Stage source explicitly (`git add -- Sources/ Tests/ Package.swift`) rather than `git add -A`.
