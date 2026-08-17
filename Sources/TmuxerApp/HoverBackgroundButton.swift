@@ -42,9 +42,13 @@ final class HoverBackgroundButton: NSButton {
         if let trackingArea {
             removeTrackingArea(trackingArea)
         }
+        // `.activeAlways`, not `.activeInKeyWindow`: this popup is a `.nonactivatingPanel` that
+        // opens on hover without becoming key (`becomesKeyOnlyIfNeeded`) — with `.activeInKeyWindow`
+        // these buttons only started receiving mouseEntered/mouseExited once something else (the
+        // reply field) made the window key first, leaving hover dead on a freshly opened popup.
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
