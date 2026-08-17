@@ -30,6 +30,16 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
     }
 }
 
+/// Records every `forceRecordOutput` call it receives — the fake `ActivityMuter` these tests
+/// script against, mirroring `PreviewClientLifecycleTests`' own `FakeActivityMuter`.
+private final class FakeActivityMuter: ActivityMuter, @unchecked Sendable {
+    private(set) var forceRecordCalls: [(paneId: String, date: Date)] = []
+    func muteOutput(paneId: String, until: Date) {}
+    func forceRecordOutput(paneId: String, at date: Date) {
+        forceRecordCalls.append((paneId, date))
+    }
+}
+
 /// Whole-branch review fix for TASK-033 (Quick Reply chip rail overflow — the rail's
 /// `NSScrollView` disabled horizontal scrolling entirely, clipping the last chip with no way to
 /// reach it) and TASK-034 (the focus hook fired on first keystroke, not on focus, via
@@ -185,5 +195,34 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
             InlineReplyInvocation.literalTextArguments(paneId: paneID, text: "hello"),
             InlineReplyInvocation.enterArguments(paneId: paneID)
         ])
+    }
+
+    // MARK: - Tile activity: reply must not wait out the popup's own zoom mute
+
+    /// Bug fix: a reply sent while `PreviewClientLifecycle`'s zoom mute is still covering the
+    /// pane (popup just opened) previously waited on the next polled/control-mode sample to
+    /// clear that mute before the Tile showed as active — `sendInlineReply` must force-record
+    /// activity itself, immediately, on a successful literal-text send.
+    @Test func sendInlineReplyForceRecordsActivityOnSuccess() {
+        let gateway = ScriptedTmuxGateway()
+        let muter = FakeActivityMuter()
+        let paneID = "%51"
+
+        HoverPreviewController.sendInlineReply(paneID: paneID, text: "hello", gateway: gateway, activityMuter: muter)
+
+        #expect(muter.forceRecordCalls.map(\.paneId) == [paneID])
+    }
+
+    /// A failed literal-text send must not force-record activity — nothing real reached the
+    /// pane, so nothing should make its Tile look active.
+    @Test func sendInlineReplyDoesNotForceRecordActivityWhenLiteralTextSendFails() {
+        let gateway = ScriptedTmuxGateway()
+        let muter = FakeActivityMuter()
+        let paneID = "%51"
+        gateway.fail(InlineReplyInvocation.literalTextArguments(paneId: paneID, text: "hello"))
+
+        HoverPreviewController.sendInlineReply(paneID: paneID, text: "hello", gateway: gateway, activityMuter: muter)
+
+        #expect(muter.forceRecordCalls.isEmpty)
     }
 }

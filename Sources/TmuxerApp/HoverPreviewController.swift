@@ -347,8 +347,9 @@ final class HoverPreviewController: NSResponder {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let gateway = gateway
+        let activityMuter = activityMuter
         Task.detached {
-            Self.sendInlineReply(paneID: paneID, text: trimmed, gateway: gateway)
+            Self.sendInlineReply(paneID: paneID, text: trimmed, gateway: gateway, activityMuter: activityMuter)
         }
     }
 
@@ -364,13 +365,29 @@ final class HoverPreviewController: NSResponder {
     /// though there's no UI surface here to show it on. Not `private` — the whole-branch-review
     /// test for this fix calls it directly against a fake `TmuxGateway`, the same test seam
     /// `PreviewClientLifecycleTests` uses for `PreviewClientLifecycle`.
-    nonisolated static func sendInlineReply(paneID: String, text: String, gateway: any TmuxGateway) {
+    ///
+    /// `activityMuter?.forceRecordOutput` fires immediately after a successful literal-text
+    /// send (bug fix: the Tile could take a while to show the reply as activity, or miss it
+    /// entirely, when `PreviewClientLifecycle`'s own zoom mute — armed the moment this same
+    /// popup opened — was still covering the pane; `recordOutput`'s normal path silently drops
+    /// output landing inside that window, and the polled/control-mode sample carrying the
+    /// reply's real activity has no way to tell itself apart from the mute's intended target,
+    /// the zoom's self-inflicted repaint). Fired on send, not on the `Enter` outcome — the
+    /// literal text is what makes the pane's foreground program do something, `Enter` is just
+    /// how it's submitted.
+    nonisolated static func sendInlineReply(
+        paneID: String,
+        text: String,
+        gateway: any TmuxGateway,
+        activityMuter: (any ActivityMuter)? = nil
+    ) {
         do {
             _ = try gateway.run(InlineReplyInvocation.literalTextArguments(paneId: paneID, text: text))
         } catch {
             logInlineReplyFailure("literal-text send failed: \(error)")
             return
         }
+        activityMuter?.forceRecordOutput(paneId: paneID, at: Date())
         do {
             _ = try gateway.run(InlineReplyInvocation.enterArguments(paneId: paneID))
         } catch {

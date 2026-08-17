@@ -214,6 +214,7 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
         func muteOutput(paneId: String, until: Date) {
             calls.append((paneId, until))
         }
+        func forceRecordOutput(paneId: String, at date: Date) {}
     }
 
     private let referenceDate = Date(timeIntervalSince1970: 1_700_000_000)

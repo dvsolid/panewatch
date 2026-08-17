@@ -143,3 +143,20 @@ private let referenceDate = Date(timeIntervalSince1970: 1_700_000_000)
     store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(45))
     #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(46)) == .ready)
 }
+
+/// Bug fix: an Inline Reply sent while `PreviewClientLifecycle`'s zoom mute is still covering
+/// the pane (the popup opened moments before the reply was sent) must still make the Tile show
+/// as active immediately, not wait out that mute window — `forceRecordOutput` is the seam
+/// `HoverPreviewController.sendInlineReply` uses for that, and unlike `recordOutput` it must not
+/// be silently dropped by an active `muteOutput` deadline.
+@Test func forceRecordOutputIgnoresAnActiveMute() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+    store.muteOutput(paneId: "%1", until: referenceDate.addingTimeInterval(60))
+
+    // Falsifiable: `recordOutput` at this same instant would be dropped by the active mute
+    // (per `mutedOutputIsIgnoredUntilTheMuteWindowEnds` above) — `forceRecordOutput` must not be.
+    store.forceRecordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(55))
+
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(56)) == .blinking)
+}

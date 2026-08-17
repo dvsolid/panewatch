@@ -57,6 +57,20 @@ public final class ActivityStateStore: @unchecked Sendable {
         mutedUntil[paneId] = until
     }
 
+    /// Records output for `paneId` unconditionally, ignoring any active `muteOutput` deadline —
+    /// unlike `recordOutput`, which a mute silently drops. For a write this app itself just
+    /// performed and *knows* is real (Inline Reply's `send-keys`, not a zoom's self-inflicted
+    /// repaint `muteOutput` exists to filter out), waiting for the mute to lapse and the next
+    /// polled/control-mode sample to land would leave the Tile reading stale for however long
+    /// that takes — this makes "the Tile reflects the reply immediately" not depend on outrunning
+    /// whatever mute window happens to be active (e.g. the Hover Preview Popup's own zoom mute,
+    /// still in effect if a reply is sent moments after the popup opens).
+    public func forceRecordOutput(paneId: String, at date: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        lastOutputAt[paneId] = date
+    }
+
     /// Seeds `lastOutputAt` for a pane this store has never recorded, without disturbing one it
     /// already has — `StatusBarEngine.reconcile` calls this for every discovered pane on every
     /// pass, using tmux's own `#{window_activity}` (`AgentPane.windowActivityAt`) as the value.
@@ -98,11 +112,14 @@ public final class ActivityStateStore: @unchecked Sendable {
     }
 }
 
-/// The minimal seam `PreviewClientLifecycle` depends on to mute its own zoom-induced repaint —
-/// `muteOutput(paneId:until:)` alone, rather than the whole of `ActivityStateStore`, so a caller
-/// that only needs to suppress activity doesn't also gain the ability to read or reset phases.
+/// The minimal seam callers depend on to influence activity tracking without gaining the
+/// ability to read or reset phases — `PreviewClientLifecycle` mutes its own zoom-induced
+/// repaint (`muteOutput`); `HoverPreviewController` force-records a real Inline Reply send
+/// (`forceRecordOutput`) so the Tile reflects it immediately rather than waiting out whatever
+/// mute window (e.g. that same zoom mute) happens to be active.
 public protocol ActivityMuter: Sendable {
     func muteOutput(paneId: String, until: Date)
+    func forceRecordOutput(paneId: String, at date: Date)
 }
 
 extension ActivityStateStore: ActivityMuter {}
