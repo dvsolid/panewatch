@@ -10,7 +10,7 @@ import Testing
 /// looks identical to a genuinely empty pane), and tmux's own error text — inherited stderr,
 /// never redirected — leaks straight into whatever terminal or log is watching the app's own
 /// stderr. This was a real, user-visible bug: `can't find pane: %81` appearing unprompted after
-/// closing a pane tmuxer-mac was watching.
+/// closing a pane PaneWatch was watching.
 ///
 /// Each test writes a tiny fake `tmux`-shaped shell script to a temp file and points the gateway
 /// at it via the `tmuxPath` test seam — the same pattern

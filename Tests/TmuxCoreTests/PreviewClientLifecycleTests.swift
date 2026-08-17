@@ -41,12 +41,12 @@ private final class ScriptedTmuxGateway: TmuxGateway, @unchecked Sendable {
 }
 
 /// Exercises `PreviewClientLifecycle`'s sequencing over a fake `TmuxGateway` — the pure
-/// orchestration this task pulled out of the AppKit-facing `PreviewClient` (TmuxerApp)
+/// orchestration this task pulled out of the AppKit-facing `PreviewClient` (PaneWatchApp)
 /// specifically so it stays unit-testable. See `PreviewClientInvocation`'s doc comment for
 /// the live-tmux findings that shaped this sequence.
 @Suite struct PreviewClientLifecycleTests {
     private let paneID = "%51"
-    private let groupName = "tmuxer-preview-51"
+    private let groupName = "panewatch-preview-51"
 
     private func makeGatewayWithExistingPane(windowIndex: Int = 2, windowHeight: Int = 40) -> ScriptedTmuxGateway {
         let gateway = ScriptedTmuxGateway()

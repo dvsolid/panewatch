@@ -2,7 +2,7 @@ import Foundation
 
 /// Orchestrates a Preview Client's grouped-session setup/teardown (glossary "Preview
 /// Client") over `TmuxGateway`'s one-shot `run(_:)` — pure sequencing, decoupled from the
-/// actual long-lived attach process (AppKit/SwiftTerm boundary, TmuxerApp's
+/// actual long-lived attach process (AppKit/SwiftTerm boundary, PaneWatchApp's
 /// `PreviewClient`) so the setup steps and their failure handling are fixture-testable
 /// against a fake gateway rather than only manually verifiable. See
 /// `PreviewClientInvocation`'s doc comment for the live-tmux findings that shaped this.
@@ -37,7 +37,7 @@ public struct PreviewClientLifecycle: Sendable {
         /// the client's own row count never appeared at all — not merely a truncated bottom
         /// edge, the whole screen came back blank, because every line the source program
         /// painted landed on a row number the client's own buffer doesn't have. `PreviewClient`
-        /// (TmuxerApp) reads this before spawning the attach and shrinks its terminal's font
+        /// (PaneWatchApp) reads this before spawning the attach and shrinks its terminal's font
         /// until its own row count is at least this, so the client can always show the window's
         /// full height regardless of where the source program's cursor happens to rest.
         public let windowHeight: Int
@@ -93,7 +93,7 @@ public struct PreviewClientLifecycle: Sendable {
     ///    preview.
     public func prepareGroupSession(paneID: String) throws -> GroupSession {
         // Armed before any tmux command below runs, unconditionally — not just around the zoom
-        // toggle further down. `PreviewClient` (TmuxerApp) is about to attach its own read-only
+        // toggle further down. `PreviewClient` (PaneWatchApp) is about to attach its own read-only
         // client to the group session this function builds, and that's a second, independent
         // source of false activity: live-verified against a real tmux 3.6a server, a pane whose
         // foreground program has an active terminal mode (Claude Code enables the Kitty
@@ -107,7 +107,7 @@ public struct PreviewClientLifecycle: Sendable {
         // replay unmuted — live-verified: the very first hover after a mute-at-the-end build
         // still recorded real activity, with a *second*, later replay correctly suppressed —
         // proving the race was real, not hypothetical. Muting here, before anything runs, is
-        // what closes it. Kept in `TmuxCore` rather than `PreviewClient` (TmuxerApp) so this
+        // what closes it. Kept in `TmuxCore` rather than `PreviewClient` (PaneWatchApp) so this
         // stays fixture-testable.
         muteActivity(paneID: paneID)
 

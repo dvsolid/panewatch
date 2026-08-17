@@ -357,7 +357,7 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
             // screen content* — to every client sharing that pane whenever *any* client
             // (re)attaches, not just the newly-attaching one, so anchoring solely on this
             // process's own `%end` (the original `postAttachSettleWindow` fix) only ever covered
-            // its first attach: any later hover, another `tmuxer-mac` instance, or a manual
+            // its first attach: any later hover, another `PaneWatch` instance, or a manual
             // `tmux attach` on the same session reopened the same false-activity window with no
             // protection at all. Reacting to the *notification type* here — never the pane
             // payload itself (SPEC §230) — covers every one of those triggers generically instead

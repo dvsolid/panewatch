@@ -15,3 +15,6 @@ __pycache__/
 # qtc-dev vault — live operational state (task status, decisions, memory).
 # Gitignored by design: ralph's commit discipline assumes this is never staged.
 docs/project/
+
+# Local qtc-dev workflow tooling (skills, agents, hooks) — kept locally, not published.
+.claude/

@@ -14,7 +14,7 @@ import Testing
 /// guards a specific piece of that fix.
 @Suite struct PreviewClientInvocationTests {
     @Test func groupSessionNameStripsThePaneSigil() {
-        #expect(PreviewClientInvocation.groupSessionName(paneID: "%51") == "tmuxer-preview-51")
+        #expect(PreviewClientInvocation.groupSessionName(paneID: "%51") == "panewatch-preview-51")
     }
 
     /// Guards the fix's most important property: the long-lived attach targets the *group*
@@ -26,20 +26,20 @@ import Testing
     @Test func attachInvocationTargetsGroupSessionNeverBareTmux() {
         let invocation = PreviewClientInvocation.attachInvocation(
             tmuxPath: "/opt/homebrew/bin/tmux",
-            groupName: "tmuxer-preview-51"
+            groupName: "panewatch-preview-51"
         )
 
         #expect(invocation.executable == "/opt/homebrew/bin/tmux")
         #expect(invocation.executable.hasPrefix("/"))
-        #expect(invocation.arguments == ["attach", "-r", "-f", "read-only,ignore-size", "-t", "tmuxer-preview-51"])
+        #expect(invocation.arguments == ["attach", "-r", "-f", "read-only,ignore-size", "-t", "panewatch-preview-51"])
     }
 
     /// `-t <pane_id>` (not a session name) — tmux resolves a pane id to its owning session for
     /// grouping, so pane_id stays the only input this whole flow needs (SPEC §3.4).
     @Test func createGroupArgumentsGroupsAgainstThePaneNotTheSession() {
-        let arguments = PreviewClientInvocation.createGroupArguments(paneID: "%51", groupName: "tmuxer-preview-51")
+        let arguments = PreviewClientInvocation.createGroupArguments(paneID: "%51", groupName: "panewatch-preview-51")
 
-        #expect(arguments == ["new-session", "-t", "%51", "-d", "-s", "tmuxer-preview-51"])
+        #expect(arguments == ["new-session", "-t", "%51", "-d", "-s", "panewatch-preview-51"])
     }
 
     /// Explicit `<groupName>:<windowIndex>`, not a bare pane id — verified live that
@@ -47,9 +47,9 @@ import Testing
     /// "current session" absent a client context) once the source session already has a real
     /// attached client, silently landing on neither the source nor the group.
     @Test func selectWindowArgumentsUseExplicitGroupAndIndexNeverABarePaneID() {
-        let arguments = PreviewClientInvocation.selectWindowArguments(groupName: "tmuxer-preview-51", windowIndex: 2)
+        let arguments = PreviewClientInvocation.selectWindowArguments(groupName: "panewatch-preview-51", windowIndex: 2)
 
-        #expect(arguments == ["select-window", "-t", "tmuxer-preview-51:2"])
+        #expect(arguments == ["select-window", "-t", "panewatch-preview-51:2"])
     }
 
     @Test func selectPaneArgumentsTargetsThePaneDirectly() {
@@ -60,20 +60,20 @@ import Testing
     /// last pointed the group's own current-window pointer at.
     @Test func zoomedQueryArgumentsTargetsTheGroupAndReadsTheZoomedFlag() {
         #expect(
-            PreviewClientInvocation.zoomedQueryArguments(groupName: "tmuxer-preview-51")
-                == ["display-message", "-p", "-t", "tmuxer-preview-51", "#{window_zoomed_flag}"]
+            PreviewClientInvocation.zoomedQueryArguments(groupName: "panewatch-preview-51")
+                == ["display-message", "-p", "-t", "panewatch-preview-51", "#{window_zoomed_flag}"]
         )
     }
 
     @Test func toggleZoomArgumentsTargetsTheGroupWithResizePaneZ() {
         #expect(
-            PreviewClientInvocation.toggleZoomArguments(groupName: "tmuxer-preview-51")
-                == ["resize-pane", "-Z", "-t", "tmuxer-preview-51"]
+            PreviewClientInvocation.toggleZoomArguments(groupName: "panewatch-preview-51")
+                == ["resize-pane", "-Z", "-t", "panewatch-preview-51"]
         )
     }
 
     @Test func killGroupArgumentsTargetsTheGroupSessionByName() {
-        #expect(PreviewClientInvocation.killGroupArguments(groupName: "tmuxer-preview-51") == ["kill-session", "-t", "tmuxer-preview-51"])
+        #expect(PreviewClientInvocation.killGroupArguments(groupName: "panewatch-preview-51") == ["kill-session", "-t", "panewatch-preview-51"])
     }
 
     /// `-t <pane_id>` for `list-panes` resolves to the pane's *window* and lists every pane in

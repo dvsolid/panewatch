@@ -291,7 +291,7 @@ import Testing
     func livePipesRealControlModeOutputFromTmux() throws {
         let tmuxPath = TmuxCore.defaultTmuxPath
         let gateway = ProcessTmuxGateway(tmuxPath: tmuxPath)
-        let sessionName = "tmuxer-mac-test-\(UUID().uuidString.prefix(8))"
+        let sessionName = "panewatch-test-\(UUID().uuidString.prefix(8))"
         _ = try gateway.run(["new-session", "-d", "-s", sessionName, "-x", "80", "-y", "24"])
         defer { _ = try? gateway.run(["kill-session", "-t", sessionName]) }
 

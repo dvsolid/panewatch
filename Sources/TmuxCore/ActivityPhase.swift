@@ -12,7 +12,7 @@ public enum ActivityPhase: Sendable, Equatable {
 }
 
 /// Plain RGBA — no `NSColor` — so the color mapping stays in `TmuxCore` and is unit-testable
-/// headlessly (CLAUDE.md: `TmuxCore` must stay free of AppKit). `TmuxerApp` converts this to
+/// headlessly (CLAUDE.md: `TmuxCore` must stay free of AppKit). `PaneWatchApp` converts this to
 /// `NSColor` at the render boundary.
 public struct TileColor: Equatable, Sendable {
     public let red: Double

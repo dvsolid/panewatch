@@ -1,4 +1,4 @@
-# tmuxer-mac — Native macOS Agent Status Bar
+# PaneWatch — Native macOS Agent Status Bar
 
 ## Vision
 
@@ -397,7 +397,7 @@ enum AgentType: String, Codable {
 - Auto-open on click (focus vs new terminal)
 - Exclude sessions (user-configurable list, matched on `session_name`)
 
-**Config location:** `~/Library/Preferences/com.yourname.tmuxer.plist` or `~/.config/tmuxer/config.yaml`
+**Config location:** `~/Library/Preferences/com.yourname.panewatch.plist` or `~/.config/panewatch/config.yaml`
 
 ## Technical Findings from Investigation
 

@@ -43,7 +43,7 @@ public enum PreviewClientInvocation {
     /// without this exclusion the group's row can win `AgentDetector`'s alphabetical dedup
     /// tie-break and relabel the Tile with the group's own session name until the popup
     /// closes and the next discovery pass runs (whole-branch review finding).
-    public static let groupSessionPrefix = "tmuxer-preview-"
+    public static let groupSessionPrefix = "panewatch-preview-"
 
     /// Deterministic per-pane group-session name, so a leftover session from a previous
     /// run that didn't tear down cleanly (e.g. an app crash mid-preview) can be recognized
@@ -107,7 +107,7 @@ public enum PreviewClientInvocation {
     }
 
     /// The one vector handed directly to `LocalProcessTerminalView.startProcess(executable:
-    /// args:)` outside the `TmuxGateway` seam (TmuxerApp's `PreviewClient`) — carries
+    /// args:)` outside the `TmuxGateway` seam (PaneWatchApp's `PreviewClient`) — carries
     /// `tmuxPath` so a test can assert the executable slot is never bare `tmux` (CLAUDE.md),
     /// the same reason `ProcessTmuxGateway.capturePaneInvocation` does. `-r` plus `-f
     /// read-only,ignore-size` matches the flags SPEC §3.2 already validated for monitoring

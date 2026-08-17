@@ -365,7 +365,7 @@ private final class FakeClock: @unchecked Sendable {
 
     /// Bug repro: live-verified against a real tmux 3.6a server that anchoring the settle window
     /// solely to this process's own `%end` misses the far more common trigger — an *unrelated*
-    /// client attaching to the same session (another `tmuxer-mac` cold start, a hover-preview
+    /// client attaching to the same session (another `PaneWatch` cold start, a hover-preview
     /// grouped-session create or teardown, a manual `tmux attach`) rebroadcasts the same
     /// terminal-mode replay to every client already watching that session, including one settled
     /// minutes earlier. `%client-session-changed` (classified `.other`) is exactly the

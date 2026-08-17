@@ -9,3 +9,19 @@ import Testing
 @Test func tmuxPathIsAbsolute() {
     #expect(TmuxCore.defaultTmuxPath.hasPrefix("/"))
 }
+
+/// Falsifiable: hardcoding the Apple Silicon Homebrew path back in (ignoring `isExecutableFile`)
+/// fails this — the resolver must actually pick the candidate the predicate reports as present.
+@Test func resolveTmuxPathPicksFirstExistingCandidate() {
+    let candidates = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
+    let resolved = TmuxCore.resolveTmuxPath(candidates: candidates) { $0 == "/usr/local/bin/tmux" }
+    #expect(resolved == "/usr/local/bin/tmux")
+}
+
+/// Falsifiable: returning `nil`/crashing when nothing exists on disk fails this — CI and
+/// tmux-less machines must still get a usable (if wrong) default.
+@Test func resolveTmuxPathFallsBackToFirstCandidateWhenNoneExist() {
+    let candidates = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
+    let resolved = TmuxCore.resolveTmuxPath(candidates: candidates) { _ in false }
+    #expect(resolved == "/opt/homebrew/bin/tmux")
+}

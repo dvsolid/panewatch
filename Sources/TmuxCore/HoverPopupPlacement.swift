@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Pure rect math for TASK-014's Hover Preview Popup positioning — split out of
-/// `HoverPreviewController` (`TmuxerApp`, AppKit-facing and not unit-testable) specifically so
+/// `HoverPreviewController` (`PaneWatchApp`, AppKit-facing and not unit-testable) specifically so
 /// this half stays headlessly testable, the same rationale `NSColor(_ tileColor:)`'s doc comment
 /// gives for keeping `TmuxCore` AppKit-free (CLAUDE.md). `CGRect`/`CGSize` are CoreGraphics, not
 /// AppKit, so this needs no `import AppKit` and no new `Package.swift` dependency.

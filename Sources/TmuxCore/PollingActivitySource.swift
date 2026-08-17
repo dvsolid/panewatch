@@ -49,7 +49,7 @@ public final class PollingActivitySource: ActivitySource, @unchecked Sendable {
         // seam ever needs to call a probe/tick method. `DispatchSourceTimer` (not
         // `Foundation.Timer`) on purpose: it fires independent of any `RunLoop`, so this stays
         // headlessly correct even though `TmuxCore` never runs the app's main run loop
-        // (CLAUDE.md: that belongs to `TmuxerApp`).
+        // (CLAUDE.md: that belongs to `PaneWatchApp`).
         let queue = DispatchQueue(label: "PollingActivitySource.probe")
         let source = DispatchSource.makeTimerSource(queue: queue)
         source.schedule(deadline: .now() + probeInterval, repeating: probeInterval)

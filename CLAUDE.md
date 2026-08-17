@@ -1,4 +1,4 @@
-# tmuxer-mac
+# PaneWatch
 
 Native macOS menu bar app that monitors AI coding agent tmux sessions and shows a vertical
 floating status bar. Design lives in [SPEC.md](SPEC.md) — read it before implementing anything;
@@ -22,13 +22,13 @@ command text, so a paraphrase silently misses the cache and re-runs the whole su
 Package.swift
 Sources/
   TmuxCore/      pure logic — discovery, parsing, agent detection, ActivitySource
-  TmuxerApp/     AppKit/SwiftUI shell
+  PaneWatchApp/  AppKit/SwiftUI shell
 Tests/
   TmuxCoreTests/
 ```
 
 `TmuxCore` must stay free of AppKit so it tests headlessly. Anything needing a window,
-`NSStatusItem`, or the main run loop belongs in `TmuxerApp`.
+`NSStatusItem`, or the main run loop belongs in `PaneWatchApp`.
 
 ## Toolchain
 

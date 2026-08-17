@@ -135,7 +135,7 @@ public struct AgentDetector: Sendable {
         // hover popup is open, its group session shares the hovered pane's pane_id with the
         // pane's real source session, so `list-panes -a` reports the same pane_id twice. Left
         // in, the group's row can win the dedup tie-break below (it sorts after most real
-        // session names) and relabel the Tile with `tmuxer-preview-<N>:...` until the popup
+        // session names) and relabel the Tile with `panewatch-preview-<N>:...` until the popup
         // closes and the next discovery pass corrects it (~30s later). `session_grouped`/
         // `session_group` can't discriminate here — tmux reports both the group and its
         // source session as grouped once linked — so the deterministic naming convention is

@@ -15,7 +15,7 @@ import Foundation
 public struct StatusBarEngine: Sendable {
     private let discovery: PaneDiscovery
     private let detector: AgentDetector
-    /// `public`, unlike the other collaborators here: `StatusBarShell` (TmuxerApp) hands this
+    /// `public`, unlike the other collaborators here: `StatusBarShell` (PaneWatchApp) hands this
     /// same instance to `FloatingPanel`/`HoverPreviewController` so a Hover Preview's own zoom
     /// side effect can mute itself out of activity tracking (`ActivityMuter`,
     /// `PreviewClientLifecycle`) — the one collaborator this engine's composition needs to be

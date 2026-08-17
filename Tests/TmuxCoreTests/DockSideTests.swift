@@ -51,7 +51,7 @@ import Testing
 }
 
 /// In-memory `DockSideStore` conformance for tests — no `UserDefaults` domain touched. The real
-/// adapter, `UserDefaultsDockSideStore`, lives in `TmuxerApp`.
+/// adapter, `UserDefaultsDockSideStore`, lives in `PaneWatchApp`.
 private final class FakeDockSideStore: DockSideStore {
     private var side: DockSide = .right
 
