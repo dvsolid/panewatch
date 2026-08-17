@@ -42,6 +42,16 @@ final class HoverPreviewController: NSResponder {
     private var previewClient: PreviewClient?
     /// The pane whose popup is currently shown on screen. `nil` when no popup is open.
     private var activePaneID: String?
+    /// TASK-034: the two signals `HoverPreviewCloseGate.shouldStayOpen(_:)` decides on. Both
+    /// reset to `false` whenever the popup fully closes (`closeAndDetachClient()`,
+    /// `tearDownActivePreviewSynchronously()`) so stale state from one pane's hover never
+    /// leaks into the next — this same popup/panel instance is reused across every hover.
+    /// `mouseInsideActiveArea` covers the union of "mouse is over the active Tile" and "mouse
+    /// is over the popup itself" — the two areas every close-timer call site already treated
+    /// identically before this task (`tileMouseEntered`/`Exited`, `mouseEntered`/`Exited`
+    /// below), so one flag suffices for both.
+    private var mouseInsideActiveArea = false
+    private var fieldFocused = false
     /// The pane a dwell timer is currently counting down for — distinct from `activePaneID`
     /// since the popup isn't open yet during the dwell.
     private var pendingPaneID: String?
@@ -147,7 +157,8 @@ final class HoverPreviewController: NSResponder {
             if active == paneID {
                 // Re-entering the Tile whose popup is already open — cancel any pending close,
                 // no new dwell needed.
-                cancelClose()
+                mouseInsideActiveArea = true
+                updateCloseState()
                 return
             }
             // Hovering a second Tile while a popup is already open: close the first before
@@ -175,7 +186,8 @@ final class HoverPreviewController: NSResponder {
             cancelDwell()
         }
         if activePaneID == paneID {
-            scheduleClose()
+            mouseInsideActiveArea = false
+            updateCloseState()
         }
     }
 
@@ -184,12 +196,30 @@ final class HoverPreviewController: NSResponder {
         // route through `TileHoverProxy`) — entering the popup cancels any pending close from
         // having just left the Tile (acceptance item 2: "moving from the Tile directly into the
         // popup does not close it").
-        cancelClose()
+        mouseInsideActiveArea = true
+        updateCloseState()
     }
 
     override func mouseExited(with event: NSEvent) {
         guard activePaneID != nil else { return }
-        scheduleClose()
+        mouseInsideActiveArea = false
+        updateCloseState()
+    }
+
+    /// TASK-034: the single place every mouse-tracking/field-focus call site above routes
+    /// through, rather than calling `scheduleClose()`/`cancelClose()` directly — consults
+    /// `HoverPreviewCloseGate.shouldStayOpen(_:)` on the current `mouseInsideActiveArea`/
+    /// `fieldFocused` pair and only then decides which of the two to invoke. A no-op while no
+    /// popup is open (`activePaneID == nil`): none of the mouse/focus events above have
+    /// anything to schedule or cancel yet.
+    private func updateCloseState() {
+        guard activePaneID != nil else { return }
+        let signal = HoverPreviewCloseGate.Signal(mouseInside: mouseInsideActiveArea, fieldFocused: fieldFocused)
+        if HoverPreviewCloseGate.shouldStayOpen(signal) {
+            cancelClose()
+        } else {
+            scheduleClose()
+        }
     }
 
     private func open(paneID: String, tileView: NSView) {
@@ -207,6 +237,12 @@ final class HoverPreviewController: NSResponder {
         panel.setFrame(frame, display: false)
         panel.orderFrontRegardless()
         activePaneID = paneID
+        // The dwell timer that led here only ever fires while the mouse is still over the
+        // Tile (`tileMouseExited` cancels it otherwise) — seed `mouseInsideActiveArea`
+        // accordingly rather than leaving it at its stale `false` default, which would
+        // schedule a spurious close on the very first `updateCloseState()` call.
+        mouseInsideActiveArea = true
+        fieldFocused = false
 
         startPreview(paneID: paneID, popup: panel)
     }
@@ -259,6 +295,8 @@ final class HoverPreviewController: NSResponder {
         cancelDwell()
         cancelClose()
         activePaneID = nil
+        mouseInsideActiveArea = false
+        fieldFocused = false
         popup?.orderOut(nil)
         let teardown: @Sendable () -> Void
         if let previewClient {
@@ -288,6 +326,8 @@ final class HoverPreviewController: NSResponder {
         cancelDwell()
         cancelClose()
         activePaneID = nil
+        mouseInsideActiveArea = false
+        fieldFocused = false
         popup?.orderOut(nil)
         previewClient?.stopSynchronously()
         previewClient = nil
@@ -560,6 +600,16 @@ final class HoverPreviewController: NSResponder {
             guard let self, let paneID = self.activePaneID else { return }
             self.performInlineReply(paneID: paneID, text: text)
         }
+        // TASK-034: the "new hook that fires when the Preview Input text field gains or
+        // resigns first responder" the feature spec's `HoverPreviewCloseGate` doc comment
+        // describes — routes through the same `updateCloseState()` every mouse-tracking call
+        // site does, so the field-focus signal and the mouse-inside signal are never handled
+        // by two independently-drifting code paths.
+        panel.onInlineReplyFieldFocusChanged = { [weak self] focused in
+            guard let self else { return }
+            self.fieldFocused = focused
+            self.updateCloseState()
+        }
         return panel
     }
 
@@ -705,6 +755,12 @@ private final class HoverPreviewPopup: NSPanel {
     /// the single place that no-ops on it (acceptance item 5), so this popup has no duplicate
     /// copy of that rule to drift out of sync.
     var onSubmitInlineReply: ((String) -> Void)?
+
+    /// TASK-034: fired `true` when the Preview Input field becomes first responder for
+    /// editing, `false` when it resigns — `HoverPreviewController` wires this straight into
+    /// `HoverPreviewCloseGate`'s `fieldFocused` signal so the popup stays open while the field
+    /// has focus, even with the mouse fully outside the popup's bounds.
+    var onInlineReplyFieldFocusChanged: ((Bool) -> Void)?
 
     init() {
         let size = HoverPopupPlacement.size
@@ -940,5 +996,19 @@ extension HoverPreviewPopup: NSTextFieldDelegate {
         guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
         submitInlineReply()
         return true
+    }
+
+    /// TASK-034: fires when `inputField` becomes first responder for editing (a click or
+    /// programmatic focus) — the "gains first responder" half of
+    /// `onInlineReplyFieldFocusChanged`.
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        onInlineReplyFieldFocusChanged?(true)
+    }
+
+    /// TASK-034: fires when `inputField` resigns first responder for editing (clicking away,
+    /// the window resigning key, etc.) — the "resigns first responder" half of
+    /// `onInlineReplyFieldFocusChanged`.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        onInlineReplyFieldFocusChanged?(false)
     }
 }
