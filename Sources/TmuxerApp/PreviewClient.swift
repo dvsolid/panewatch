@@ -278,4 +278,44 @@ private final class ReadOnlyLocalProcessTerminalView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         // Deliberately empty — see this type's doc comment.
     }
+
+    /// SwiftTerm's `TerminalView` unconditionally installs an `NSScroller` pinned to its own
+    /// trailing/top/bottom anchors (`MacTerminalView.setupScroller`), and — because that scroller
+    /// is a bare control, not one an `NSScrollView` manages — nothing ever auto-hides it. It
+    /// draws a permanent ~12pt light slot down the full height of the preview that can't be
+    /// dragged and scrolls nothing (`scroller.isEnabled = false`), which is exactly the artifact
+    /// the user reported: "a light grey bar that looks like a scrollbar except there's no way to
+    /// scroll." Live-measured on this machine at 2x: the bar spans the popup's `innerContent`
+    /// bounds to the pixel (y 96→1224, right edge flush at its trailing edge), which is that
+    /// scroller's geometry and nothing else's.
+    ///
+    /// SwiftTerm keeps the scroller `private` with no visibility API — but its own
+    /// `reservedScrollerWidth` is written as `scroller?.isHidden == true ? 0 : scrollerWidth`,
+    /// so `isHidden` is the supported lever: hiding it also hands the reserved width back to the
+    /// terminal instead of leaving a dead gutter. Removing it from the view tree would do
+    /// neither (`isHidden` would stay `false`) and would break SwiftTerm's own constraints.
+    ///
+    /// Applied here rather than once at init because this runs on every layout pass, so it
+    /// survives anything upstream that recreates or re-shows the scroller. The `where` guard
+    /// makes it a no-op after the first pass — hiding it changes `reservedScrollerWidth`, which
+    /// feeds back into layout, and re-setting `isHidden` unconditionally would keep dirtying it.
+    private func hideScroller() {
+        for case let scroller as NSScroller in subviews where !scroller.isHidden {
+            scroller.isHidden = true
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        hideScroller()
+    }
+
+    /// `layout()` alone would leave the scroller visible until the first layout pass — and the
+    /// terminal's column count is derived from `reservedScrollerWidth` before then
+    /// (`PreviewClient.sizeTerminal(toWindowRows:)` runs ahead of `startProcess`). Hiding it as
+    /// soon as the view is installed keeps the pty sized against the final width.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        hideScroller()
+    }
 }

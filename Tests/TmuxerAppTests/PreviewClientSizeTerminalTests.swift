@@ -129,6 +129,50 @@ import Testing
         #expect(client.terminalView.terminal.rows >= targetRows)
     }
 
+    // MARK: - The permanent, non-functional scroller SwiftTerm installs
+
+    /// Mirrors `HoverPreviewPopup.showTerminal(_:)`: the terminal view is added to a superview
+    /// (`innerContent`) and given its bounds. `viewDidMoveToSuperview` is the hook
+    /// `ReadOnlyLocalProcessTerminalView` hides the scroller from, so this is the production
+    /// sequence, not a shortcut.
+    private func makeClientInstalledInAContainer() -> PreviewClient {
+        let client = PreviewClient()
+        let container = NSView(frame: Self.innerContentBounds)
+        container.addSubview(client.terminalView)
+        client.terminalView.frame = container.bounds
+        container.layoutSubtreeIfNeeded()
+        return client
+    }
+
+    /// The user-visible bug: SwiftTerm's `TerminalView` unconditionally installs an `NSScroller`
+    /// pinned down its full trailing edge, and since no `NSScrollView` manages it, nothing ever
+    /// hides it — it drew a permanent light slot the height of the preview that scrolled nothing
+    /// (`scroller.isEnabled = false`). Falsifiable in exactly that way: drop
+    /// `ReadOnlyLocalProcessTerminalView`'s hide and a visible scroller reappears here.
+    @Test func theTerminalViewShowsNoScroller() {
+        let client = makeClientInstalledInAContainer()
+
+        let visibleScrollers = client.terminalView.subviews.compactMap { $0 as? NSScroller }.filter { !$0.isHidden }
+
+        #expect(visibleScrollers.isEmpty)
+    }
+
+    /// It must be *hidden*, not removed: SwiftTerm's own `reservedScrollerWidth` reads
+    /// `scroller?.isHidden == true ? 0 : scrollerWidth`, so `isHidden` is what hands the reserved
+    /// gutter back to the terminal — detaching the view would leave `isHidden == false`, keep the
+    /// width reserved, and break the constraints SwiftTerm activated against it. This also proves
+    /// the test above isn't passing vacuously against a view tree that never had a scroller.
+    @Test func theScrollerIsHiddenRatherThanRemovedFromTheViewTree() throws {
+        let client = makeClientInstalledInAContainer()
+
+        let scroller = try #require(
+            client.terminalView.subviews.compactMap { $0 as? NSScroller }.first,
+            "SwiftTerm no longer installs an NSScroller — the hide in ReadOnlyLocalProcessTerminalView is now dead code"
+        )
+
+        #expect(scroller.isHidden)
+    }
+
     /// Calling with a window that's not actually taller than what's already fitted must be a
     /// no-op, not a crash from dividing by a stale/zero row count.
     @Test func sizeTerminalIsANoOpWhenWindowRowsIsNotPositive() {
