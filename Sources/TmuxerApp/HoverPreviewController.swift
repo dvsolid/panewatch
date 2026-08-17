@@ -337,12 +337,12 @@ final class HoverPreviewController: NSResponder {
     /// .onSubmitInlineReply` for whichever pane is currently active. Empty/whitespace-only
     /// `text` is a no-op (acceptance item 5) — trimmed and checked here, on the main actor,
     /// before `InlineReplyInvocation` is ever reached, so a blank submit never builds or sends
-    /// an argument vector at all. The two `TmuxGateway.run(_:)` calls are blocking I/O and run
-    /// off the main actor via `Task.detached`, the same discipline `tileDoubleClicked` uses —
-    /// `sendInlineReply` below is `nonisolated static` and takes only `Sendable` values for the
-    /// same reason `performSwitch` is. Never calls `close()`/`scheduleClose()`: the popup
-    /// staying open and showing the same pane afterward (acceptance item 7) is simply this
-    /// method never touching either.
+    /// an argument vector at all. The two `TmuxGateway.run(_:)` calls (conditional on the first
+    /// succeeding — see `sendInlineReply` below) are blocking I/O and run off the main actor via
+    /// `Task.detached`, the same discipline `tileDoubleClicked` uses — `sendInlineReply` below is
+    /// `nonisolated static` and takes only `Sendable` values for the same reason `performSwitch`
+    /// is. Never calls `close()`/`scheduleClose()`: the popup staying open and showing the same
+    /// pane afterward (acceptance item 7) is simply this method never touching either.
     func performInlineReply(paneID: String, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -353,12 +353,37 @@ final class HoverPreviewController: NSResponder {
     }
 
     /// ADR-0006's two-step write: the literal text, then a separate `Enter` — never combined,
-    /// mirroring `InlineReplyInvocation`'s own split. Best-effort (`try?`), same posture
-    /// `performSwitch`'s own retargeting calls take: a pane that vanished between the popup
-    /// opening and the user hitting Send silently no-ops rather than throwing into the UI.
-    nonisolated private static func sendInlineReply(paneID: String, text: String, gateway: any TmuxGateway) {
-        _ = try? gateway.run(InlineReplyInvocation.literalTextArguments(paneId: paneID, text: text))
-        _ = try? gateway.run(InlineReplyInvocation.enterArguments(paneId: paneID))
+    /// mirroring `InlineReplyInvocation`'s own split. The `Enter` call only runs when the
+    /// literal-text send actually succeeded (whole-branch review finding: sending `Enter`
+    /// unconditionally could deliver a bare `Enter` keystroke with no text if the first call
+    /// failed, which `InlineReplyInvocation`'s own doc comment says must never happen). A pane
+    /// that vanished between the popup opening and the user hitting Send still no-ops rather
+    /// than throwing into the UI — `submitInlineReply()` on the popup side has already cleared
+    /// the input field by the time this runs, so a failure is logged (`logInlineReplyFailure`,
+    /// mirroring `logOpenNewFailure`'s posture below) rather than swallowed with no trace, even
+    /// though there's no UI surface here to show it on. Not `private` — the whole-branch-review
+    /// test for this fix calls it directly against a fake `TmuxGateway`, the same test seam
+    /// `PreviewClientLifecycleTests` uses for `PreviewClientLifecycle`.
+    nonisolated static func sendInlineReply(paneID: String, text: String, gateway: any TmuxGateway) {
+        do {
+            _ = try gateway.run(InlineReplyInvocation.literalTextArguments(paneId: paneID, text: text))
+        } catch {
+            logInlineReplyFailure("literal-text send failed: \(error)")
+            return
+        }
+        do {
+            _ = try gateway.run(InlineReplyInvocation.enterArguments(paneId: paneID))
+        } catch {
+            logInlineReplyFailure("Enter send failed: \(error)")
+        }
+    }
+
+    /// Best-effort logging for a failed Preview Input reply (whole-branch review finding:
+    /// previously swallowed with no trace at all, after the input field had already been
+    /// cleared). Same floor as `logOpenNewFailure`: log it, no tooltip UI surfacing it to the
+    /// user, out of scope for this fix pass.
+    nonisolated private static func logInlineReplyFailure(_ message: String) {
+        FileHandle.standardError.write(Data("tmuxer: Preview Input reply failed: \(message)\n".utf8))
     }
 
     /// TASK-020: double-click-to-Switch, wired from every Tile's `TileHoverProxy` gesture
@@ -702,7 +727,7 @@ private final class TileHoverProxy: NSResponder {
 /// before this task (see `ReadOnlyLocalProcessTerminalView.send`, `PreviewClient.swift, and
 /// tmux's own `-r` attach flag, both still fully intact).
 @MainActor
-private final class HoverPreviewPopup: NSPanel {
+final class HoverPreviewPopup: NSPanel {
     private static let cornerRadius: CGFloat = 12
     /// Keeps the terminal/unavailable content off the card's rounded corners.
     private static let contentInset: CGFloat = 10
@@ -736,8 +761,11 @@ private final class HoverPreviewPopup: NSPanel {
     /// TASK-032: single-line free-text reply field. Cleared whenever a new pane's terminal is
     /// shown (`showTerminal(_:)`) — this same panel instance is reused across every hover
     /// (`HoverPreviewController.popup`), so text left over from a previous pane's unsent reply
-    /// must never survive into the next one.
-    private let inputField: NSTextField
+    /// must never survive into the next one. Not `private` — the whole-branch-review fix for
+    /// TASK-034 (see `makeFirstResponder(_:)` below) needs a test seam to drive real first-
+    /// responder transitions against this exact instance (`@testable import TmuxerApp`, matching
+    /// how `PreviewClient`'s own AppKit internals are already tested).
+    let inputField: NSTextField
     private let sendButton: NSButton
     /// TASK-033: one button per `quickReplyChips` entry, in order — its `title` is always the
     /// chip's exact fixed text, which is also the exact string sent (`handleChipClicked`), so
@@ -745,6 +773,16 @@ private final class HoverPreviewPopup: NSPanel {
     /// Stored (not just built and forgotten) so `setInlineReplyEnabled` can disable them
     /// alongside the field/Send button.
     private let chipButtons: [NSButton]
+    /// The chip rail's clipping/scrolling container (whole-branch review fix for TASK-033's
+    /// overflow bug, below). Not `private` for the same test-seam reason as `inputField`: a test
+    /// needs to inspect `documentView`/`hasHorizontalScroller`/`documentVisibleRect` directly
+    /// rather than re-deriving them from `contentView`'s view hierarchy.
+    let chipScrollView: NSScrollView
+    /// TASK-034 fix (whole-branch review): dedupes `makeFirstResponder(_:)`'s focus signal so
+    /// `onInlineReplyFieldFocusChanged` only fires on an actual transition, not on every
+    /// first-responder change elsewhere in the window (e.g. clicking Send while the field is
+    /// already unfocused would otherwise re-report `false`).
+    private var lastReportedFieldFocus = false
 
     /// Fired with the field's current text on Enter (via `control(_:textView:doCommandBy:)`,
     /// `insertNewline(_:)` only — losing focus by clicking away never submits, per ADR-0006's
@@ -820,9 +858,13 @@ private final class HoverPreviewPopup: NSPanel {
         // of every button's natural (`sizeToFit`) width plus spacing. `chipScrollView` clips
         // that to `chipRailWidth`; when the content is wider than the rail, scrolling (trackpad/
         // scroll-wheel) reaches the rest instead of wrapping or clipping them away (acceptance
-        // item 3) — `hasHorizontalScroller`/`hasVerticalScroller` are both `false` to keep the
-        // rail visually clean within the compact single-row footer, not because scrolling itself
-        // is disabled; `NSClipView` still respects scroll gestures with no scroller bar shown.
+        // item 3) — `NSClipView` respects scroll gestures regardless of scroller visibility, but
+        // the eight fixed chips at their natural widths measurably overflow `chipRailWidth`
+        // (whole-branch review finding), so `hasHorizontalScroller = true` with `scrollerStyle =
+        // .overlay` makes that overflow *discoverable and reachable*: an overlay scroller
+        // auto-hides and consumes no layout space, so the rail still reads as a clean single row
+        // until the user actually scrolls it. `hasVerticalScroller` stays `false` — this rail
+        // never scrolls vertically.
         var chipX: CGFloat = 0
         var chipButtons: [NSButton] = []
         for chipText in Self.quickReplyChips {
@@ -845,12 +887,14 @@ private final class HoverPreviewPopup: NSPanel {
 
         let chipScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: chipRailWidth, height: Self.footerHeight))
         chipScrollView.documentView = chipContent
-        chipScrollView.hasHorizontalScroller = false
+        chipScrollView.hasHorizontalScroller = true
+        chipScrollView.scrollerStyle = .overlay
         chipScrollView.hasVerticalScroller = false
         chipScrollView.drawsBackground = false
         chipScrollView.horizontalScrollElasticity = .allowed
         chipScrollView.verticalScrollElasticity = .none
         chipScrollView.autoresizingMask = [.width]
+        self.chipScrollView = chipScrollView
 
         super.init(
             contentRect: NSRect(origin: .zero, size: size),
@@ -919,6 +963,33 @@ private final class HoverPreviewPopup: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// TASK-034 fix (whole-branch review): `NSTextFieldDelegate.controlTextDidBeginEditing(_:)`
+    /// only fires after the user types the *first character* — verified empirically, and
+    /// contrary to what this file used to claim — not when `inputField` simply becomes first
+    /// responder via a click with no typing yet. That gap let the close-timer fire out from
+    /// under an in-progress reply (click the field, move the mouse out before typing, `fieldFocused`
+    /// stays `false`), exactly what TASK-034 was supposed to prevent.
+    ///
+    /// `makeFirstResponder(_:)` is the one choke point AppKit routes every focus transition
+    /// through for this window, including a plain click into `inputField` — unlike the delegate
+    /// callback, it fires on the very first responder change, before any typing. Reading
+    /// `firstResponder` *after* `super` and comparing against both `inputField` and
+    /// `inputField.currentEditor()` is required because an editable `NSTextField` doesn't hold
+    /// first-responder status itself once editing starts — the window hands that off to the
+    /// shared field editor (an `NSTextView`), so a click-then-hover-away with no typing lands on
+    /// `inputField` itself, while typing then hovering away lands on the field editor. Dedupes
+    /// through `lastReportedFieldFocus` so a first-responder change elsewhere in the window
+    /// (e.g. clicking Send) doesn't re-report a signal that hasn't actually changed.
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let result = super.makeFirstResponder(responder)
+        let focused = firstResponder === inputField || firstResponder === inputField.currentEditor()
+        if focused != lastReportedFieldFocus {
+            lastReportedFieldFocus = focused
+            onInlineReplyFieldFocusChanged?(focused)
+        }
+        return result
+    }
 
     /// Displays a live terminal view (`PreviewClient.terminalView`), replacing whatever this
     /// popup was showing before — a fresh `PreviewClient` per `open(paneID:tileView:)` means a
@@ -996,19 +1067,5 @@ extension HoverPreviewPopup: NSTextFieldDelegate {
         guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
         submitInlineReply()
         return true
-    }
-
-    /// TASK-034: fires when `inputField` becomes first responder for editing (a click or
-    /// programmatic focus) — the "gains first responder" half of
-    /// `onInlineReplyFieldFocusChanged`.
-    func controlTextDidBeginEditing(_ obj: Notification) {
-        onInlineReplyFieldFocusChanged?(true)
-    }
-
-    /// TASK-034: fires when `inputField` resigns first responder for editing (clicking away,
-    /// the window resigning key, etc.) — the "resigns first responder" half of
-    /// `onInlineReplyFieldFocusChanged`.
-    func controlTextDidEndEditing(_ obj: Notification) {
-        onInlineReplyFieldFocusChanged?(false)
     }
 }
