@@ -77,6 +77,41 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         NSFont(name: preferredFontName, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 
+    private static func ansiColor(_ hex: UInt32) -> Color {
+        Color(
+            red8: UInt16((hex >> 16) & 0xFF),
+            green8: UInt16((hex >> 8) & 0xFF),
+            blue8: UInt16(hex & 0xFF)
+        )
+    }
+
+    /// On user request: raising contrast only for `nativeForegroundColor` above would barely
+    /// change anything, since almost every glyph a preview shows carries its own ANSI color
+    /// from the agent CLI rather than that one unstyled default — so this overrides all 16 ANSI
+    /// slots, keeping each hue recognizable (red stays red, a CLI's diff/warning colors still
+    /// read as diff/warning colors) while pushing every one to a legible lightness against
+    /// `nativeBackgroundColor`. Index 8 ("bright black") matters most: it's the slot most CLIs
+    /// and markdown renderers pick for secondary/dim text, which is exactly what read as washed
+    /// out before this.
+    private static let highContrastAnsiPalette: [Color] = [
+        ansiColor(0x1A1A1E), // 0  black
+        ansiColor(0xFF6B6B), // 1  red
+        ansiColor(0x59D499), // 2  green
+        ansiColor(0xFFD166), // 3  yellow
+        ansiColor(0x5AA9FF), // 4  blue
+        ansiColor(0xC792EA), // 5  magenta
+        ansiColor(0x4FD6E0), // 6  cyan
+        ansiColor(0xC7CCD6), // 7  white
+        ansiColor(0xA6ACB8), // 8  bright black (the usual dim/comment slot)
+        ansiColor(0xFF8787), // 9  bright red
+        ansiColor(0x6EE7A8), // 10 bright green
+        ansiColor(0xFFDB85), // 11 bright yellow
+        ansiColor(0x7FBBFF), // 12 bright blue
+        ansiColor(0xD7A8F0), // 13 bright magenta
+        ansiColor(0x7BE6EE), // 14 bright cyan
+        ansiColor(0xF5F5F7)  // 15 bright white
+    ]
+
     init(
         gateway: any TmuxGateway = ProcessTmuxGateway(),
         tmuxPath: String = TmuxCore.defaultTmuxPath,
@@ -94,12 +129,20 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
         terminalView.terminal.silentLog = true
         // See `makeTerminalFont()`'s doc comment for the font choice and fallback.
         terminalView.font = Self.makeTerminalFont()
-        // SwiftTerm's own default background is pure black — on user request, a notch lighter
-        // so the preview reads as a terminal sitting on the popup's `hudWindow` material rather
-        // than a flat black cutout. `nativeBackgroundColor`, not the popup's own material/layer:
-        // `LocalProcessTerminalView` paints its own opaque background every frame, over
-        // whatever sits behind it in the view hierarchy.
-        terminalView.nativeBackgroundColor = NSColor(calibratedRed: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
+        // On user request: SwiftTerm's only two defaults here were a flat-black background and
+        // one unstyled foreground (~4.9:1 against it, barely WCAG AA) — everything else visible
+        // in a preview (comments, prose, dim text) is whatever ANSI color the agent CLI already
+        // picked, which read far lower-contrast than that. Fixing the ladder, not just the
+        // headline text, means overriding the full 16-color ANSI palette too
+        // (`installColors(_:)`), not only background/foreground — the trade-off, accepted here,
+        // is that a CLI's own color choices (its reds, its "dim" comments) no longer come
+        // through verbatim; every pane now renders through this one fixed scheme instead.
+        // `nativeBackgroundColor`/`nativeForegroundColor`, not the popup's own material/layer:
+        // `LocalProcessTerminalView` paints its own opaque background every frame, over whatever
+        // sits behind it in the view hierarchy.
+        terminalView.nativeBackgroundColor = NSColor(calibratedRed: 0x0B / 255, green: 0x0B / 255, blue: 0x0D / 255, alpha: 1.0)
+        terminalView.nativeForegroundColor = NSColor(calibratedRed: 0xF5 / 255, green: 0xF5 / 255, blue: 0xF7 / 255, alpha: 1.0)
+        terminalView.installColors(Self.highContrastAnsiPalette)
         // Same bug class TASK-014's review caught on `NSTrackingArea.owner` (also `weak`):
         // without this wiring surviving past init, `processTerminated` would never reach a
         // live delegate and acceptance items 4/5 would be silently dead despite a green build.
