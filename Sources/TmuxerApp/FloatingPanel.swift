@@ -107,37 +107,17 @@ final class FloatingPanel: NSPanel {
         let material = NSVisualEffectView(frame: content.bounds)
         material.autoresizingMask = [.width, .height]
         material.material = .hudWindow
-        // Must stay `.behindWindow`, not `.withinWindow`: this window is fully transparent
-        // (`backgroundColor = .clear`, `isOpaque = false`) and `material` is the very first
-        // subview in it — `.withinWindow` blends with whatever window content sits *behind* a
-        // view, and there is none here, so a first attempt at `.withinWindow` rendered the
-        // entire panel invisible (confirmed live: `CGWindowListCopyWindowInfo` still reported
-        // the window onscreen, but a screenshot showed nothing at all). `TileCardView.swift`'s
-        // own per-Tile material can use `.withinWindow` only because *this* `.behindWindow`
-        // layer sits behind it, giving it something to blend against.
+        // Must stay `.behindWindow`: this window is transparent (`backgroundColor = .clear`)
+        // and `material` is its very first subview, so `.withinWindow` — which blends with
+        // window content *behind* the view — has nothing to blend against and renders the
+        // whole panel invisible (tried live, 2026-08-16). `TileCardView`'s per-Tile material
+        // can use `.withinWindow` only because this layer sits behind it.
         material.blendingMode = .behindWindow
         material.state = .active
         material.wantsLayer = true
         material.layer?.cornerRadius = Self.cornerRadius
         material.layer?.masksToBounds = true
         content.addSubview(material)
-
-        // Opaque dark tint over the raw vibrancy, clipped to the same rounded rect. Without it,
-        // any strip `material` shows through with nothing opaque drawn on top — the ~9pt gutter
-        // beside each Tile (`horizontalMargin` in `render(_:)` below) — directly reflects
-        // `.behindWindow`'s blur of whatever sits on the *desktop* behind this window. Positioned
-        // next to a bright terminal window, that gutter read as a distinct light-grey smear
-        // running the height of the Tile column (user report: "lightest grey bar in the middle"
-        // — confirmed not part of the terminal app's own UI). This tint sits between `material`
-        // and everything else, damping that backdrop-dependent brightness to a uniform dark tone
-        // while still letting enough blur through to read as "frosted," not flat black.
-        let materialTint = NSView(frame: content.bounds)
-        materialTint.autoresizingMask = [.width, .height]
-        materialTint.wantsLayer = true
-        materialTint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        materialTint.layer?.cornerRadius = Self.cornerRadius
-        materialTint.layer?.masksToBounds = true
-        content.addSubview(materialTint)
 
         // Branding header, doubling as the drag surface for changing Dock Side (TASK-031) —
         // no longer purely decorative. Echoes the Menu Bar Icon's own `rectangle.stack` glyph
@@ -221,13 +201,6 @@ final class FloatingPanel: NSPanel {
         scrollView.frame = NSRect(x: 0, y: 0, width: content.bounds.width, height: content.bounds.height - Self.headerHeight)
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
-        // `autohidesScrollers` defaults to `false` — without it, AppKit draws the vertical
-        // scroller's track permanently (legacy scroller style), even when the tile list fits
-        // entirely within the panel's visible height and there's nothing to scroll to: a
-        // constant ~15pt grey bar along the trailing edge with no functional scroll behind it
-        // (user report: "looks like a scrollbar except there's no way to scroll"). `true` makes
-        // AppKit show/hide it based on whether the tile list actually overflows.
-        scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         content.addSubview(scrollView)
