@@ -736,14 +736,17 @@ final class HoverPreviewPopup: NSPanel {
     /// "meaningfully shrinking" the terminal box (feature spec user story 6).
     private static let footerHeight: CGFloat = 28
     private static let footerTopGap: CGFloat = 8
-    private static let footerButtonWidth: CGFloat = 56
+    /// Send is a square icon button, not a wide text button — same height as the row itself, so
+    /// it lines up flush with the field's bottom/top edge.
+    private static let footerButtonWidth: CGFloat = footerHeight
     private static let footerControlSpacing: CGFloat = 8
     /// TASK-033: the field's fixed width in the "Option A: single row" layout (feature spec
     /// §Further notes) — the chip rail takes the row's leading space and scrolls, the field
     /// keeps this "usable minimum width" at the row's tail alongside Send, rather than the
-    /// field stretching to fill whatever space chips don't use.
-    private static let footerFieldWidth: CGFloat = 160
-    private static let chipSpacing: CGFloat = 4
+    /// field stretching to fill whatever space chips don't use. Widened after user feedback
+    /// (232, up from 160) — shrinking Send to a square icon button freed up the room.
+    private static let footerFieldWidth: CGFloat = 232
+    private static let chipSpacing: CGFloat = 8
     /// TASK-033: the fixed, non-configurable Quick Reply set (feature spec "Implementation
     /// decisions") — a plain constant with one call site (this popup's chip rail), not a
     /// `TmuxCore` module (feature spec §Architecture "Deliberately not proposed": it fails the
@@ -840,46 +843,71 @@ final class HoverPreviewPopup: NSPanel {
         ))
         inputField.placeholderString = "Reply…"
         inputField.font = .systemFont(ofSize: 12)
+        inputField.bezelStyle = .roundedBezel
+        // `.roundedBezel`'s single-line cell centers both the placeholder and typed text
+        // vertically within whatever frame height it's given — `usesSingleLineMode` keeps that
+        // true even though this frame (28pt) is taller than the field's natural intrinsic height.
+        inputField.usesSingleLineMode = true
         inputField.autoresizingMask = [.minXMargin]
         inputField.lineBreakMode = .byTruncatingTail
         self.inputField = inputField
 
-        let sendButton = NSButton(frame: NSRect(
+        // Square icon button (not a wide "Send" text button) so it reads as a single compact
+        // control flush with the field's height, matching the iMessage/Mail "send" affordance —
+        // a filled blue square with a white up-arrow glyph, not a bordered push button.
+        let sendButton = HoverBackgroundButton(frame: NSRect(
             x: footerWidth - Self.footerButtonWidth,
             y: 0,
             width: Self.footerButtonWidth,
             height: Self.footerHeight
         ))
-        sendButton.title = "Send"
-        sendButton.bezelStyle = .rounded
+        sendButton.image = NSImage(
+            systemSymbolName: "arrow.up",
+            accessibilityDescription: "Send"
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
+        sendButton.imagePosition = .imageOnly
+        sendButton.contentTintColor = .white
+        sendButton.cornerRadius = 7
+        sendButton.restingColor = .systemBlue
+        sendButton.hoverColor = NSColor.systemBlue.blended(withFraction: 0.15, of: .white) ?? .systemBlue
         sendButton.autoresizingMask = [.minXMargin]
         self.sendButton = sendButton
 
         // Each chip button's title is the exact fixed text `handleChipClicked` sends — laid out
         // left-to-right in `quickReplyChips`' order inside `chipContent`, whose width is the sum
-        // of every button's natural (`sizeToFit`) width plus spacing. `chipScrollView` clips
-        // that to `chipRailWidth`; if the content is ever wider than the rail (e.g. the catalog
-        // grows again), scrolling (trackpad/scroll-wheel) reaches the rest instead of wrapping or
-        // clipping them away (acceptance item 3) — `hasHorizontalScroller = true` with
-        // `scrollerStyle = .overlay` makes that overflow *discoverable and reachable*: an overlay
-        // scroller auto-hides and consumes no layout space, so the rail still reads as a clean
-        // single row until the user actually scrolls it. `hasVerticalScroller` stays `false` —
-        // this rail never scrolls vertically. `.inline` bezel renders as the flat, low-profile
-        // suggestion pill AppKit uses for Mail/Messages smart replies — a closer visual match for
-        // "quick reply chip" than the default `.rounded` push-button bezel, which read as heavy,
-        // bordered buttons crowding a compact footer row.
+        // of every button's natural (padded, pill-shaped) width plus spacing. `chipScrollView`
+        // clips that to `chipRailWidth`; if the content is ever wider than the rail (e.g. the
+        // catalog grows again), scrolling (trackpad/scroll-wheel) reaches the rest instead of
+        // wrapping or clipping them away (acceptance item 3) — `hasHorizontalScroller = true`
+        // with `scrollerStyle = .overlay` makes that overflow *discoverable and reachable*: an
+        // overlay scroller auto-hides and consumes no layout space, so the rail still reads as a
+        // clean single row until the user actually scrolls it. `hasVerticalScroller` stays
+        // `false` — this rail never scrolls vertically. `HoverBackgroundButton` draws each chip
+        // as a flat pill that highlights on hover, not just on press — a closer visual match for
+        // "quick reply chip" than a bordered push-button bezel, and real hover feedback a stock
+        // bezel style doesn't give.
+        let chipFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let chipTextColor = NSColor.white.withAlphaComponent(0.92)
+        let chipHeight: CGFloat = 22
+        let chipHorizontalPadding: CGFloat = 10
         var chipX: CGFloat = 0
         var chipButtons: [NSButton] = []
         for chipText in Self.quickReplyChips {
-            let chip = NSButton(title: chipText, target: nil, action: nil)
-            chip.bezelStyle = .inline
-            chip.controlSize = .small
-            chip.font = .systemFont(ofSize: 11)
-            chip.sizeToFit()
-            var frame = chip.frame
-            frame.origin = NSPoint(x: chipX, y: (Self.footerHeight - frame.height) / 2)
-            chip.frame = frame
-            chipX = frame.maxX + Self.chipSpacing
+            let attributedTitle = NSAttributedString(string: chipText, attributes: [
+                .font: chipFont,
+                .foregroundColor: chipTextColor
+            ])
+            let chipWidth = ceil(attributedTitle.size().width) + chipHorizontalPadding * 2
+            let chip = HoverBackgroundButton(frame: NSRect(
+                x: chipX,
+                y: (Self.footerHeight - chipHeight) / 2,
+                width: chipWidth,
+                height: chipHeight
+            ))
+            chip.attributedTitle = attributedTitle
+            chip.attributedAlternateTitle = attributedTitle
+            chip.alignment = .center
+            chipX = chip.frame.maxX + Self.chipSpacing
             chipButtons.append(chip)
         }
         self.chipButtons = chipButtons
