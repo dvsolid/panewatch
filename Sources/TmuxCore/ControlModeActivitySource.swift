@@ -238,10 +238,18 @@ public final class ControlModeActivitySource: FailableActivitySource, @unchecked
         lock.lock()
         clientsBySession[session] = process
         lock.unlock()
-        process.onLine = { [weak self] line in
+        // `weak process` too, not just `weak self`: these closures are stored *on* `process`
+        // itself (`LiveControlModeProcess.lineHandler`/`terminateHandler`), so a strong capture
+        // here is a self-referential retain cycle — the process (and its `Process`/`Pipe`/
+        // `FileHandle`) would never deallocate, reaped or not. `clientsBySession` is this
+        // object's only other strong reference, so once that drops (`setWatchedPanes`' reap
+        // path), a weak `process` here is what actually lets it go.
+        process.onLine = { [weak self, weak process] line in
+            guard let process else { return }
             self?.handle(line: line, process: process)
         }
-        process.onTerminate = { [weak self] in
+        process.onTerminate = { [weak self, weak process] in
+            guard let process else { return }
             self?.handleTerminate(session: session, process: process)
         }
         return true

@@ -1048,6 +1048,17 @@ final class HoverPreviewPopup: NSPanel {
         return result
     }
 
+    /// Resets the dedupe flag above whenever this popup closes — every `orderOut` call site
+    /// (`HoverPreviewController.closeAndDetachClient()`/`tearDownActivePreviewSynchronously()`)
+    /// also resets its own `fieldFocused` to `false`, and leaving this one stale would desync
+    /// the pair: the window can still hold the field editor as first responder after being
+    /// ordered out, so without this reset the next popup use starts from a `true` dedupe state
+    /// that no longer reflects reality.
+    override func orderOut(_ sender: Any?) {
+        lastReportedFieldFocus = false
+        super.orderOut(sender)
+    }
+
     /// Displays a live terminal view (`PreviewClient.terminalView`), replacing whatever this
     /// popup was showing before — a fresh `PreviewClient` per `open(paneID:tileView:)` means a
     /// fresh view here too, so the previous pane's frame never lingers on screen while the new
@@ -1065,9 +1076,14 @@ final class HoverPreviewPopup: NSPanel {
     func showTerminal(_ view: NSView) {
         unavailableLabel.isHidden = true
         clearTerminalViews()
+        // `addSubview` before `frame =`: `ReadOnlyLocalProcessTerminalView.viewDidMoveToSuperview()`
+        // hides SwiftTerm's permanent scroller as soon as the view lands in a superview, and that
+        // has to happen *before* the frame assignment below triggers `processSizeChange` — reserve
+        // order left `cols` computed against the still-visible scroller's width, permanently
+        // losing the columns the hide was meant to reclaim (nothing afterward re-triggers a resize).
+        innerContent.addSubview(view)
         view.frame = innerContent.bounds
         view.autoresizingMask = [.width]
-        innerContent.addSubview(view)
         inputField.stringValue = ""
         setInlineReplyEnabled(true)
     }

@@ -55,11 +55,11 @@ public final class FallbackActivitySource: ActivitySource, @unchecked Sendable {
         // whether the consumer has assigned `onOutput` yet.
         primary.onOutput = { [weak self] paneId, at in
             guard let self, !self.isUsingSecondary else { return }
-            self.outputHandler?(paneId, at)
+            self.onOutput?(paneId, at)
         }
         secondary.onOutput = { [weak self] paneId, at in
             guard let self, self.isUsingSecondary else { return }
-            self.outputHandler?(paneId, at)
+            self.onOutput?(paneId, at)
         }
         primary.onFailure = { [weak self] in self?.switchToSecondary() }
     }

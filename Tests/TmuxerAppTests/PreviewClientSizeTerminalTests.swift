@@ -174,6 +174,28 @@ import Testing
         #expect(scroller.isHidden)
     }
 
+    /// Regression test for the bug where `HoverPreviewPopup.showTerminal(_:)` assigned the
+    /// view's frame *before* `addSubview` — SwiftTerm computed `cols` while the scroller was
+    /// still reserving its width, and `viewDidMoveToSuperview()`'s later `hideScroller()` call
+    /// changed `reservedScrollerWidth` without ever re-triggering a size recompute, permanently
+    /// losing the columns the hide was supposed to reclaim (live-measured: 111 cols instead of
+    /// 113 at this suite's `innerContentBounds` width). Exercises the real production entry
+    /// point (`showTerminal(_:)`) rather than a helper that merely claims to mirror it — that
+    /// divergence between helper and production is exactly what let the bug ship undetected.
+    /// Compares against `makeClientInstalledInAContainer()`, which already adds before framing,
+    /// rather than a hardcoded column count — this suite's own doc comment above explains why a
+    /// literal expected value would depend on whichever font happens to be installed.
+    @Test func showTerminalSizesAgainstTheAlreadyHiddenScrollerNotTheReservedGutter() {
+        let popup = HoverPreviewPopup()
+        let client = PreviewClient()
+
+        popup.showTerminal(client.terminalView)
+
+        let control = makeClientInstalledInAContainer()
+
+        #expect(client.terminalView.terminal.cols == control.terminalView.terminal.cols)
+    }
+
     /// Calling with a window that's not actually taller than what's already fitted must be a
     /// no-op, not a crash from dividing by a stale/zero row count.
     @Test func sizeTerminalIsANoOpWhenWindowRowsIsNotPositive() {

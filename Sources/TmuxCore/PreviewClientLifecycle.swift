@@ -164,10 +164,11 @@ public struct PreviewClientLifecycle: Sendable {
         return true
     }
 
-    /// Called immediately after a zoom toggle actually ran (in, at the end of `zoomIfNeeded`;
-    /// out, in `teardownGroupSession`) — never for a query/toggle that failed or a window that
-    /// was already zoomed, since neither of those changes what's on screen. See
-    /// `ActivityStateStore.muteOutput(paneId:until:)`'s doc comment for why this mute exists.
+    /// Also called unconditionally from the top of `prepareGroupSession`, not just after a zoom
+    /// toggle actually ran (in, at the end of `zoomIfNeeded`; out, in `teardownGroupSession`) —
+    /// those two skip a query/toggle that failed or a window already zoomed, since neither
+    /// changes what's on screen. See `ActivityStateStore.muteOutput(paneId:until:)`'s doc
+    /// comment for why this mute exists.
     private func muteActivity(paneID: String) {
         activityMuter?.muteOutput(paneId: paneID, until: clock().addingTimeInterval(Self.zoomActivityMuteWindow))
     }

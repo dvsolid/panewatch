@@ -152,6 +152,15 @@ private final class FakeControlModeProcessLauncher: ControlModeProcessLauncher, 
         defer { lock.unlock() }
         return processesByTarget[target]
     }
+
+    /// Test-only: drops this launcher's own strong reference to `target`'s spawned process, so
+    /// a test can assert deallocation once `ControlModeActivitySource`'s `clientsBySession` (the
+    /// only other intended strong referrer) has released it too.
+    func forgetProcess(for target: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        processesByTarget.removeValue(forKey: target)
+    }
 }
 
 /// Injectable clock so tests can assert 250ms coalescing behavior deterministically, without
@@ -217,6 +226,25 @@ private final class FakeClock: @unchecked Sendable {
         source.setWatchedPanes([:]) // "agents" no longer has any watched pane
 
         #expect(process?.terminateCallCount == 1)
+    }
+
+    /// Regression test for a retain cycle in `spawnClient`: `onLine`/`onTerminate` used to
+    /// capture `process` strongly while being stored *on* `process` itself
+    /// (`FakeControlModeProcess.onLine`/`onTerminate`, mirroring `LiveControlModeProcess`'s real
+    /// storage), so a reaped process never deallocated — leaking its underlying `Process`/`Pipe`/
+    /// `FileHandle`s indefinitely in a long-running app. `forgetProcess` drops the fake
+    /// launcher's own strong reference first so `clientsBySession` (dropped by `setWatchedPanes`
+    /// below) is the only referrer left standing between this and a dangling weak reference.
+    @Test func reapingASessionReleasesItsProcessRatherThanLeakingItViaARetainCycle() {
+        let launcher = FakeControlModeProcessLauncher()
+        let source = ControlModeActivitySource(launcher: launcher, tmuxPath: "/opt/homebrew/bin/tmux")
+
+        source.setWatchedPanes(["%1": "agents"])
+        weak var weakProcess = launcher.process(for: "agents")
+        launcher.forgetProcess(for: "agents")
+        source.setWatchedPanes([:]) // reaps "agents"
+
+        #expect(weakProcess == nil)
     }
 
     // MARK: - Acceptance item 4: 250ms per-pane coalescing

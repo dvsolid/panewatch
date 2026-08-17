@@ -135,8 +135,10 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
                     // `stop()` already fired (popup closed while prepare was still in-flight)
                     // or an outcome already reported some other way — clean up the group
                     // session that just got created rather than leaking it or racing a
-                    // terminal view that's already been torn down.
-                    lifecycle.teardownGroupSession(groupSession)
+                    // terminal view that's already been torn down. Detached, not run inline:
+                    // `teardownGroupSession` is a blocking `kill-session` spawn that must never
+                    // run on the main actor (see `stop()`'s doc comment).
+                    Task.detached { lifecycle.teardownGroupSession(groupSession) }
                     return
                 }
                 self.groupSession = groupSession
