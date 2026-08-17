@@ -630,7 +630,8 @@ private final class TileHoverProxy: NSResponder {
 /// that constant's doc comment for why it's 760x620, not the feature spec's original ~640x420.
 /// Body is a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
 /// unavailable" state (`showUnavailable()`, acceptance item 5) above a fixed Preview Input
-/// footer (TASK-032: a text field plus Send button) — `HoverPreviewController` swaps the former
+/// footer (TASK-032: a text field plus Send button; TASK-033 adds a Quick Reply chip rail
+/// sharing the row) — `HoverPreviewController` swaps the former
 /// per `PreviewClient.Outcome` and enables/disables the latter to match.
 ///
 /// Mirrors `FloatingPanel`'s own posture for a window that must never *activate the app* or
@@ -662,6 +663,17 @@ private final class HoverPreviewPopup: NSPanel {
     private static let footerTopGap: CGFloat = 8
     private static let footerButtonWidth: CGFloat = 56
     private static let footerControlSpacing: CGFloat = 8
+    /// TASK-033: the field's fixed width in the "Option A: single row" layout (feature spec
+    /// §Further notes) — the chip rail takes the row's leading space and scrolls, the field
+    /// keeps this "usable minimum width" at the row's tail alongside Send, rather than the
+    /// field stretching to fill whatever space chips don't use.
+    private static let footerFieldWidth: CGFloat = 160
+    private static let chipSpacing: CGFloat = 6
+    /// TASK-033: the fixed, non-configurable Quick Reply set (feature spec "Implementation
+    /// decisions") — a plain constant with one call site (this popup's chip rail), not a
+    /// `TmuxCore` module (feature spec §Architecture "Deliberately not proposed": it fails the
+    /// deletion test as an independent module). Order is the task's own acceptance-item order.
+    private static let quickReplyChips = ["Yes", "OK", "Continue", "Go on", "Looks good", "Approved", "No", "Stop"]
 
     /// Holds whichever of `showTerminal(_:)`/`showUnavailable()` is currently displayed, so
     /// swapping between them is just "remove this container's subviews, add the new one" —
@@ -677,10 +689,18 @@ private final class HoverPreviewPopup: NSPanel {
     /// must never survive into the next one.
     private let inputField: NSTextField
     private let sendButton: NSButton
+    /// TASK-033: one button per `quickReplyChips` entry, in order — its `title` is always the
+    /// chip's exact fixed text, which is also the exact string sent (`handleChipClicked`), so
+    /// there's no separate lookup table that could drift out of sync with what's on screen.
+    /// Stored (not just built and forgotten) so `setInlineReplyEnabled` can disable them
+    /// alongside the field/Send button.
+    private let chipButtons: [NSButton]
 
     /// Fired with the field's current text on Enter (via `control(_:textView:doCommandBy:)`,
     /// `insertNewline(_:)` only — losing focus by clicking away never submits, per ADR-0006's
-    /// "only an exact, explicit string the user approved" posture) or a Send click. Whitespace-
+    /// "only an exact, explicit string the user approved" posture), a Send click, or
+    /// (TASK-033) a Quick Reply chip click, with that chip's exact fixed text
+    /// (`handleChipClicked`) — one shared path for every way Preview Input can submit. Whitespace-
     /// only/empty text is *not* filtered here — `HoverPreviewController.performInlineReply` is
     /// the single place that no-ops on it (acceptance item 5), so this popup has no duplicate
     /// copy of that rule to drift out of sync.
@@ -708,16 +728,23 @@ private final class HoverPreviewPopup: NSPanel {
         unavailableLabel.alignment = .center
         self.unavailableLabel = unavailableLabel
 
+        // TASK-033 "Option A: single row" layout (feature spec §Further notes): chip rail
+        // leads, scrolling horizontally if its content overflows; the field keeps a fixed
+        // "usable minimum width" at the row's tail, alongside Send — neither the field nor the
+        // rail stretches to fight the other for space.
         let footerWidth = size.width - Self.contentInset * 2
+        let fieldX = footerWidth - Self.footerButtonWidth - Self.footerControlSpacing - Self.footerFieldWidth
+        let chipRailWidth = fieldX - Self.footerControlSpacing
+
         let inputField = NSTextField(frame: NSRect(
-            x: 0,
+            x: fieldX,
             y: 0,
-            width: footerWidth - Self.footerButtonWidth - Self.footerControlSpacing,
+            width: Self.footerFieldWidth,
             height: Self.footerHeight
         ))
         inputField.placeholderString = "Reply…"
         inputField.font = .systemFont(ofSize: 12)
-        inputField.autoresizingMask = [.width]
+        inputField.autoresizingMask = [.minXMargin]
         inputField.lineBreakMode = .byTruncatingTail
         self.inputField = inputField
 
@@ -731,6 +758,43 @@ private final class HoverPreviewPopup: NSPanel {
         sendButton.bezelStyle = .rounded
         sendButton.autoresizingMask = [.minXMargin]
         self.sendButton = sendButton
+
+        // Each chip button's title is the exact fixed text `handleChipClicked` sends — laid out
+        // left-to-right in `quickReplyChips`' order inside `chipContent`, whose width is the sum
+        // of every button's natural (`sizeToFit`) width plus spacing. `chipScrollView` clips
+        // that to `chipRailWidth`; when the content is wider than the rail, scrolling (trackpad/
+        // scroll-wheel) reaches the rest instead of wrapping or clipping them away (acceptance
+        // item 3) — `hasHorizontalScroller`/`hasVerticalScroller` are both `false` to keep the
+        // rail visually clean within the compact single-row footer, not because scrolling itself
+        // is disabled; `NSClipView` still respects scroll gestures with no scroller bar shown.
+        var chipX: CGFloat = 0
+        var chipButtons: [NSButton] = []
+        for chipText in Self.quickReplyChips {
+            let chip = NSButton(title: chipText, target: nil, action: nil)
+            chip.bezelStyle = .rounded
+            chip.controlSize = .small
+            chip.font = .systemFont(ofSize: 11)
+            chip.sizeToFit()
+            var frame = chip.frame
+            frame.origin = NSPoint(x: chipX, y: (Self.footerHeight - frame.height) / 2)
+            chip.frame = frame
+            chipX = frame.maxX + Self.chipSpacing
+            chipButtons.append(chip)
+        }
+        self.chipButtons = chipButtons
+
+        let chipContentWidth = max(chipRailWidth, chipX - Self.chipSpacing)
+        let chipContent = NSView(frame: NSRect(x: 0, y: 0, width: chipContentWidth, height: Self.footerHeight))
+        chipButtons.forEach { chipContent.addSubview($0) }
+
+        let chipScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: chipRailWidth, height: Self.footerHeight))
+        chipScrollView.documentView = chipContent
+        chipScrollView.hasHorizontalScroller = false
+        chipScrollView.hasVerticalScroller = false
+        chipScrollView.drawsBackground = false
+        chipScrollView.horizontalScrollElasticity = .allowed
+        chipScrollView.verticalScrollElasticity = .none
+        chipScrollView.autoresizingMask = [.width]
 
         super.init(
             contentRect: NSRect(origin: .zero, size: size),
@@ -779,6 +843,7 @@ private final class HoverPreviewPopup: NSPanel {
             height: Self.footerHeight
         ))
         footer.autoresizingMask = [.width]
+        footer.addSubview(chipScrollView)
         footer.addSubview(inputField)
         footer.addSubview(sendButton)
         content.addSubview(footer)
@@ -790,6 +855,10 @@ private final class HoverPreviewPopup: NSPanel {
         inputField.delegate = self
         sendButton.target = self
         sendButton.action = #selector(handleSendButtonClicked)
+        chipButtons.forEach {
+            $0.target = self
+            $0.action = #selector(handleChipClicked(_:))
+        }
     }
 
     override var canBecomeKey: Bool { true }
@@ -831,6 +900,7 @@ private final class HoverPreviewPopup: NSPanel {
     private func setInlineReplyEnabled(_ enabled: Bool) {
         inputField.isEnabled = enabled
         sendButton.isEnabled = enabled
+        chipButtons.forEach { $0.isEnabled = enabled }
     }
 
     private func clearTerminalViews() {
@@ -841,6 +911,15 @@ private final class HoverPreviewPopup: NSPanel {
 
     @objc private func handleSendButtonClicked() {
         submitInlineReply()
+    }
+
+    /// TASK-033: fires an Inline Reply with the clicked chip's exact fixed text (`sender.title`
+    /// is always one of `quickReplyChips`, unmodified) — no typing, and no interaction with
+    /// `inputField` at all, unlike `submitInlineReply()`. Reuses the same
+    /// `onSubmitInlineReply` closure `HoverPreviewController.performInlineReply` is wired to
+    /// (TASK-032): no new send path, no new pure logic, per this task's slice.
+    @objc private func handleChipClicked(_ sender: NSButton) {
+        onSubmitInlineReply?(sender.title)
     }
 
     private func submitInlineReply() {

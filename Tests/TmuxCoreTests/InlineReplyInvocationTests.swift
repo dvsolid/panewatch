@@ -40,4 +40,18 @@ import Testing
     @Test func enterArgumentsBuildsASeparateTargetedSendKeysEnterCall() {
         #expect(InlineReplyInvocation.enterArguments(paneId: "%51") == ["send-keys", "-t", "%51", "Enter"])
     }
+
+    /// TASK-033: the fixed Quick Reply chip set (`HoverPreviewPopup`'s chip rail) round-trips
+    /// through the same builder unchanged, one call site reusing this task's existing pure
+    /// logic — no per-chip escaping or splitting. The two multi-word entries ("Go on", "Looks
+    /// good") are the load-bearing cases here: each must land as a single trailing array
+    /// element, not split into separate arguments on the internal space.
+    @Test func literalTextArgumentsRoundTripsEveryQuickReplyChipUnchanged() {
+        let chips = ["Yes", "OK", "Continue", "Go on", "Looks good", "Approved", "No", "Stop"]
+        for chip in chips {
+            #expect(InlineReplyInvocation.literalTextArguments(paneId: "%51", text: chip) == [
+                "send-keys", "-t", "%51", "-l", "--", chip
+            ])
+        }
+    }
 }
