@@ -293,6 +293,34 @@ final class HoverPreviewController: NSResponder {
         previewClient = nil
     }
 
+    /// TASK-032: Preview Input's Send/Enter wiring, called by `HoverPreviewPopup
+    /// .onSubmitInlineReply` for whichever pane is currently active. Empty/whitespace-only
+    /// `text` is a no-op (acceptance item 5) — trimmed and checked here, on the main actor,
+    /// before `InlineReplyInvocation` is ever reached, so a blank submit never builds or sends
+    /// an argument vector at all. The two `TmuxGateway.run(_:)` calls are blocking I/O and run
+    /// off the main actor via `Task.detached`, the same discipline `tileDoubleClicked` uses —
+    /// `sendInlineReply` below is `nonisolated static` and takes only `Sendable` values for the
+    /// same reason `performSwitch` is. Never calls `close()`/`scheduleClose()`: the popup
+    /// staying open and showing the same pane afterward (acceptance item 7) is simply this
+    /// method never touching either.
+    func performInlineReply(paneID: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let gateway = gateway
+        Task.detached {
+            Self.sendInlineReply(paneID: paneID, text: trimmed, gateway: gateway)
+        }
+    }
+
+    /// ADR-0006's two-step write: the literal text, then a separate `Enter` — never combined,
+    /// mirroring `InlineReplyInvocation`'s own split. Best-effort (`try?`), same posture
+    /// `performSwitch`'s own retargeting calls take: a pane that vanished between the popup
+    /// opening and the user hitting Send silently no-ops rather than throwing into the UI.
+    nonisolated private static func sendInlineReply(paneID: String, text: String, gateway: any TmuxGateway) {
+        _ = try? gateway.run(InlineReplyInvocation.literalTextArguments(paneId: paneID, text: text))
+        _ = try? gateway.run(InlineReplyInvocation.enterArguments(paneId: paneID))
+    }
+
     /// TASK-020: double-click-to-Switch, wired from every Tile's `TileHoverProxy` gesture
     /// recognizer (`attachHoverTracking`). Runs `closeAndDetachClient()` **unconditionally,
     /// first, and synchronously on the main actor** — before the `Task.detached` below even
@@ -524,6 +552,14 @@ final class HoverPreviewController: NSResponder {
         if let content = panel.contentView {
             content.addTrackingArea(Self.hoverTrackingArea(owner: self))
         }
+        // TASK-032: routes Preview Input's Send/Enter through `performInlineReply` for
+        // whichever pane is active *at submit time* — read fresh here rather than captured at
+        // popup-creation time, since this same panel instance is reused across every hover
+        // (`popup ?? makePopup()`), so `activePaneID` can only be trusted read live.
+        panel.onSubmitInlineReply = { [weak self] text in
+            guard let self, let paneID = self.activePaneID else { return }
+            self.performInlineReply(paneID: paneID, text: text)
+        }
         return panel
     }
 
@@ -592,37 +628,71 @@ private final class TileHoverProxy: NSResponder {
 /// `HoverPopupPlacement.size` (TASK-014 acceptance item 4, not resizable: `.borderless` with no
 /// `.resizable` style bit, and nothing in `HoverPreviewController` ever changes its size). See
 /// that constant's doc comment for why it's 760x620, not the feature spec's original ~640x420.
-/// Body is either a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
-/// unavailable" state (`showUnavailable()`, acceptance item 5) — `HoverPreviewController` swaps
-/// between them per `PreviewClient.Outcome`.
+/// Body is a live `PreviewClient.terminalView` (`showTerminal(_:)`) or an inline "preview
+/// unavailable" state (`showUnavailable()`, acceptance item 5) above a fixed Preview Input
+/// footer (TASK-032: a text field plus Send button) — `HoverPreviewController` swaps the former
+/// per `PreviewClient.Outcome` and enables/disables the latter to match.
 ///
-/// Mirrors `FloatingPanel`'s own posture for a window that must never steal focus: explicit
-/// `canBecomeKey`/`canBecomeMain` overrides on top of `.nonactivatingPanel`'s own default (see
-/// `FloatingPanel`'s doc comment for why the style mask alone isn't enough), `hidesOnDeactivate
-/// = false`, and a `collectionBehavior` that keeps it floating above all Spaces/full-screen apps
-/// the same way `FloatingPanel` does. This is also one half of TASK-015's read-only preview
-/// guarantee being structural rather than a promise: a window that can never become key can
-/// never receive keystrokes to forward in the first place (the other half is
-/// `ReadOnlyLocalProcessTerminalView.send`, `PreviewClient.swift`).
+/// Mirrors `FloatingPanel`'s own posture for a window that must never *activate the app* or
+/// steal focus from whatever the user was doing elsewhere: `.nonactivatingPanel` plus
+/// `becomesKeyOnlyIfNeeded = true` below is the standard AppKit combination for an accessory-app
+/// utility panel whose controls can still take keyboard focus on click (the same mechanism
+/// Spotlight-style panels use) — `canBecomeKey` used to be hard-overridden `false` (TASK-014)
+/// specifically to make that structurally impossible, back when nothing in this popup ever
+/// needed keyboard input at all. TASK-032 (ADR-0006) reverses that: Preview Input's text field
+/// needs to become first responder to accept typed replies, so `canBecomeKey` now defers to
+/// `NSPanel`'s own default (`true`) — `becomesKeyOnlyIfNeeded` is what keeps this scoped to
+/// controls that actually request it (the field, the Send button) rather than any click
+/// anywhere on the popup, e.g. the live terminal render. `canBecomeMain` stays hard-`false`:
+/// nothing here needs main-window status. `hidesOnDeactivate = false` and the
+/// `collectionBehavior` that keeps it floating above all Spaces/full-screen apps are unchanged
+/// from `FloatingPanel`'s own posture. The read-only guarantee over the *terminal render*
+/// specifically is unaffected by this reversal — it never rested on `canBecomeKey` alone even
+/// before this task (see `ReadOnlyLocalProcessTerminalView.send`, `PreviewClient.swift, and
+/// tmux's own `-r` attach flag, both still fully intact).
 @MainActor
 private final class HoverPreviewPopup: NSPanel {
     private static let cornerRadius: CGFloat = 12
     /// Keeps the terminal/unavailable content off the card's rounded corners.
     private static let contentInset: CGFloat = 10
+    /// TASK-032: Preview Input's footer row height, plus the gap above it separating it from
+    /// the terminal render — sized to fit a single-line field and button comfortably without
+    /// "meaningfully shrinking" the terminal box (feature spec user story 6).
+    private static let footerHeight: CGFloat = 28
+    private static let footerTopGap: CGFloat = 8
+    private static let footerButtonWidth: CGFloat = 56
+    private static let footerControlSpacing: CGFloat = 8
 
     /// Holds whichever of `showTerminal(_:)`/`showUnavailable()` is currently displayed, so
     /// swapping between them is just "remove this container's subviews, add the new one" —
-    /// never touches `material` (the background) or the window's own content view.
+    /// never touches `material` (the background) or the window's own content view. Preview
+    /// Input's footer lives outside this container (a sibling in `content`, not a child of
+    /// it) specifically so `clearTerminalViews()` below — which empties every subview of this
+    /// container except `unavailableLabel` — never sweeps the footer away too.
     private let innerContent: NSView
     private let unavailableLabel: NSTextField
+    /// TASK-032: single-line free-text reply field. Cleared whenever a new pane's terminal is
+    /// shown (`showTerminal(_:)`) — this same panel instance is reused across every hover
+    /// (`HoverPreviewController.popup`), so text left over from a previous pane's unsent reply
+    /// must never survive into the next one.
+    private let inputField: NSTextField
+    private let sendButton: NSButton
+
+    /// Fired with the field's current text on Enter (via `control(_:textView:doCommandBy:)`,
+    /// `insertNewline(_:)` only — losing focus by clicking away never submits, per ADR-0006's
+    /// "only an exact, explicit string the user approved" posture) or a Send click. Whitespace-
+    /// only/empty text is *not* filtered here — `HoverPreviewController.performInlineReply` is
+    /// the single place that no-ops on it (acceptance item 5), so this popup has no duplicate
+    /// copy of that rule to drift out of sync.
+    var onSubmitInlineReply: ((String) -> Void)?
 
     init() {
         let size = HoverPopupPlacement.size
         let innerContent = NSView(frame: NSRect(
             x: Self.contentInset,
-            y: Self.contentInset,
+            y: Self.contentInset + Self.footerHeight + Self.footerTopGap,
             width: size.width - Self.contentInset * 2,
-            height: size.height - Self.contentInset * 2
+            height: size.height - Self.contentInset * 2 - Self.footerHeight - Self.footerTopGap
         ))
         innerContent.autoresizingMask = [.width, .height]
         // `PreviewClient.sizeTerminal(toWindowRows:)` deliberately grows its terminal view
@@ -637,6 +707,30 @@ private final class HoverPreviewPopup: NSPanel {
         unavailableLabel.textColor = NSColor.white.withAlphaComponent(0.6)
         unavailableLabel.alignment = .center
         self.unavailableLabel = unavailableLabel
+
+        let footerWidth = size.width - Self.contentInset * 2
+        let inputField = NSTextField(frame: NSRect(
+            x: 0,
+            y: 0,
+            width: footerWidth - Self.footerButtonWidth - Self.footerControlSpacing,
+            height: Self.footerHeight
+        ))
+        inputField.placeholderString = "Reply…"
+        inputField.font = .systemFont(ofSize: 12)
+        inputField.autoresizingMask = [.width]
+        inputField.lineBreakMode = .byTruncatingTail
+        self.inputField = inputField
+
+        let sendButton = NSButton(frame: NSRect(
+            x: footerWidth - Self.footerButtonWidth,
+            y: 0,
+            width: Self.footerButtonWidth,
+            height: Self.footerHeight
+        ))
+        sendButton.title = "Send"
+        sendButton.bezelStyle = .rounded
+        sendButton.autoresizingMask = [.minXMargin]
+        self.sendButton = sendButton
 
         super.init(
             contentRect: NSRect(origin: .zero, size: size),
@@ -678,16 +772,35 @@ private final class HoverPreviewPopup: NSPanel {
         unavailableLabel.isHidden = true
         innerContent.addSubview(unavailableLabel)
 
+        let footer = NSView(frame: NSRect(
+            x: Self.contentInset,
+            y: Self.contentInset,
+            width: footerWidth,
+            height: Self.footerHeight
+        ))
+        footer.autoresizingMask = [.width]
+        footer.addSubview(inputField)
+        footer.addSubview(sendButton)
+        content.addSubview(footer)
+
         contentView = content
+
+        // Assigned after `super.init` — `self` isn't a valid delegate/target reference before
+        // the superclass initializer returns.
+        inputField.delegate = self
+        sendButton.target = self
+        sendButton.action = #selector(handleSendButtonClicked)
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     /// Displays a live terminal view (`PreviewClient.terminalView`), replacing whatever this
     /// popup was showing before — a fresh `PreviewClient` per `open(paneID:tileView:)` means a
     /// fresh view here too, so the previous pane's frame never lingers on screen while the new
-    /// attach is still spinning up.
+    /// attach is still spinning up. Also re-enables Preview Input (acceptance item 6: it's
+    /// disabled only while `showUnavailable()` is active) and clears any leftover text from a
+    /// previous pane's unsent reply (this popup instance is reused across every hover).
     ///
     /// Only `.width` autoresizes, not `.height`: this starting frame is `innerContent.bounds`
     /// (so `PreviewClient.start(paneID:)` can read a real `terminal.rows` baseline before it
@@ -702,18 +815,51 @@ private final class HoverPreviewPopup: NSPanel {
         view.frame = innerContent.bounds
         view.autoresizingMask = [.width]
         innerContent.addSubview(view)
+        inputField.stringValue = ""
+        setInlineReplyEnabled(true)
     }
 
     /// Acceptance item 5: the spawn failed outright — show the inline state instead of
-    /// whatever `showTerminal(_:)` last displayed (a blank/frozen terminal view).
+    /// whatever `showTerminal(_:)` last displayed (a blank/frozen terminal view). Also disables
+    /// Preview Input (acceptance item 6) — there is no live pane to send a reply to.
     func showUnavailable() {
         clearTerminalViews()
         unavailableLabel.isHidden = false
+        setInlineReplyEnabled(false)
+    }
+
+    private func setInlineReplyEnabled(_ enabled: Bool) {
+        inputField.isEnabled = enabled
+        sendButton.isEnabled = enabled
     }
 
     private func clearTerminalViews() {
         for subview in innerContent.subviews where subview !== unavailableLabel {
             subview.removeFromSuperview()
         }
+    }
+
+    @objc private func handleSendButtonClicked() {
+        submitInlineReply()
+    }
+
+    private func submitInlineReply() {
+        let text = inputField.stringValue
+        inputField.stringValue = ""
+        onSubmitInlineReply?(text)
+    }
+}
+
+/// TASK-032: routes Enter specifically to `submitInlineReply()` — plain `NSTextField`
+/// target/action also fires when the field simply *ends editing* (e.g. clicking away), which
+/// would send whatever the user typed and then abandoned, contradicting ADR-0006's "only an
+/// exact, explicit string the user approved" posture (feature spec user story 5). Intercepting
+/// `insertNewline(_:)` here and leaving every other command (including focus loss) unhandled —
+/// `return false` — keeps that path inert.
+extension HoverPreviewPopup: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        submitInlineReply()
+        return true
     }
 }

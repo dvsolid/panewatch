@@ -265,12 +265,15 @@ final class PreviewClient: NSObject, LocalProcessTerminalViewDelegate {
     }
 }
 
-/// Structural half of the read-only guarantee below the AppKit-window level — the other half
-/// is `HoverPreviewPopup.canBecomeKey == false`, which already prevents `keyDown` from ever
-/// reaching this view (see that type's doc comment). Overriding `send` closes the remaining
-/// gap: input paths that don't require key focus, e.g. mouse-reporting sequences a terminal
-/// app can emit for clicks/scrolling inside it. tmux's own `-r` (read-only) flag on the
-/// underlying attach is a second line of defense if this were ever bypassed regardless.
+/// The load-bearing layer of the terminal render's read-only guarantee. Before TASK-032,
+/// `HoverPreviewPopup.canBecomeKey == false` also blocked `keyDown` from ever reaching this (or
+/// any) view in the popup — TASK-032 (ADR-0006) needs the popup's new Preview Input text field
+/// to become key-focusable, so that blanket window-level block is gone (see that type's doc
+/// comment) and this override is now doing the real work: dropping every byte `TerminalView`
+/// tries to `send`, whether it arrived via `keyDown` or an input path that doesn't require key
+/// focus at all, e.g. mouse-reporting sequences a terminal app can emit for clicks/scrolling.
+/// tmux's own `-r` (read-only) flag on the underlying attach is a second line of defense if
+/// this were ever bypassed regardless.
 private final class ReadOnlyLocalProcessTerminalView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         // Deliberately empty — see this type's doc comment.
