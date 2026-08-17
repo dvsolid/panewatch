@@ -41,7 +41,12 @@ public struct ProcessTmuxGateway: TmuxGateway {
     /// `pane_current_path`, `session_grouped`, `session_group`, `alternate_on`) so later tasks
     /// (session-group dedup, alternate-screen handling) don't need to touch this format string
     /// again.
-    static let paneFormat = "#{pane_id}|#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_title}|#{pane_pid}|#{pane_tty}|#{pane_current_path}|#{session_grouped}|#{session_group}|#{alternate_on}|#{window_activity}"
+    static let paneFormat = [
+        "#{pane_id}", "#{session_name}", "#{window_index}", "#{window_name}",
+        "#{pane_index}", "#{pane_current_command}", "#{pane_title}", "#{pane_pid}",
+        "#{pane_tty}", "#{pane_current_path}", "#{session_grouped}", "#{session_group}",
+        "#{alternate_on}", "#{window_activity}"
+    ].joined(separator: "|")
 
     /// Feature spec § Architecture (`ClientDiscovery`): space-delimited, not pipe-delimited
     /// like `paneFormat` — `list-clients` has only two fields and the spec's interface comment

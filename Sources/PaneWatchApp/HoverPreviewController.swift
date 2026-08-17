@@ -2,6 +2,10 @@ import AppKit
 import Foundation
 import TmuxCore
 
+// swiftlint:disable file_length
+// Pre-existing size debt, not a lint-setup-time refactor: tracked for a future split, not a
+// green light for new files to grow this large.
+
 /// Owns the Hover Preview Popup's whole lifecycle (feature spec § Architecture) — hover
 /// detection on each Tile, the popup's positioning (`HoverPopupPlacement`, `TmuxCore`) and
 /// show/hide mechanics, and enforcing "only one popup live at a time." AppKit-facing and not
@@ -21,6 +25,7 @@ import TmuxCore
 /// itself (`proxies`, below) for as long as its Tile view is live, or the proxy is deallocated
 /// the instant `attachHoverTracking` returns and no hover event ever reaches it.
 @MainActor
+// swiftlint:disable:next type_body_length
 final class HoverPreviewController: NSResponder {
     /// Feature spec: dwell before the popup opens (TASK-014 acceptance item 1).
     private static let dwellDelay: TimeInterval = 0.35
@@ -461,6 +466,7 @@ final class HoverPreviewController: NSResponder {
         }
     }
 
+    // swiftlint:disable function_parameter_count
     /// The full SPEC §4 priority-ladder pass for one double-click: resolve the pane's current
     /// `PaneTarget` and attached-client state fresh (never cached — the Tile list can be stale
     /// by the time a double-click lands), plan the outcome, then execute it. `nonisolated` and
@@ -476,6 +482,7 @@ final class HoverPreviewController: NSResponder {
         switchPlanner: SwitchActionPlanner,
         scriptRunner: any AppleScriptRunner
     ) {
+        // swiftlint:enable function_parameter_count
         // The pane can have vanished between the double-click and this resolve (e.g. the agent
         // exited) — silently do nothing rather than act on stale/absent data, the same posture
         // `PreviewClientLifecycle.prepareGroupSession` takes for a dead pane.
@@ -830,6 +837,7 @@ final class HoverPreviewPopup: NSPanel {
     /// has focus, even with the mouse fully outside the popup's bounds.
     var onInlineReplyFieldFocusChanged: ((Bool) -> Void)?
 
+    // swiftlint:disable:next function_body_length
     init() {
         let size = HoverPopupPlacement.size
         let innerContent = NSView(frame: NSRect(

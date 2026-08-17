@@ -1,5 +1,9 @@
 import Foundation
 
+// swiftlint:disable file_length
+// Pre-existing size debt, not a lint-setup-time refactor: tracked for a future split, not a
+// green light for new files to grow this large.
+
 /// The event-driven `ActivitySource` adapter (SPEC §3.2, ADR-0001): sources `lastOutputAt`
 /// updates from tmux control-mode `%output` events, via a per-session pool of Control Clients,
 /// instead of `PollingActivitySource`'s probe-and-hash. Covers both the steady-state happy path

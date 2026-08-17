@@ -164,7 +164,7 @@ public struct AgentDetector: Sendable {
         }
         let batchArgv = pidsNeedingWalk.isEmpty ? [:] : descendantInspector.descendantArgv(of: pidsNeedingWalk)
 
-        var winners: [String: (pane: RawPane, type: AgentType, matchedTitle: Bool)] = [:]
+        var winners: [String: Candidate] = [:]
         var order: [String] = []
         for pane in panes {
             guard let (type, matchedTitle) = detectType(pane, batchArgv: batchArgv) else { continue }
@@ -172,10 +172,10 @@ public struct AgentDetector: Sendable {
                 // SPEC §2.1: session-group duplicates collapse to one Tile; break ties
                 // alphabetically on session name for stability across scans.
                 if pane.sessionName < existing.pane.sessionName {
-                    winners[pane.paneId] = (pane, type, matchedTitle)
+                    winners[pane.paneId] = Candidate(pane: pane, type: type, matchedTitle: matchedTitle)
                 }
             } else {
-                winners[pane.paneId] = (pane, type, matchedTitle)
+                winners[pane.paneId] = Candidate(pane: pane, type: type, matchedTitle: matchedTitle)
                 order.append(pane.paneId)
             }
         }
@@ -183,6 +183,12 @@ public struct AgentDetector: Sendable {
             let winner = winners[paneId]!
             return AgentPane(pane: winner.pane, type: winner.type, matchedTitle: winner.matchedTitle)
         }
+    }
+
+    private struct Candidate {
+        let pane: RawPane
+        let type: AgentType
+        let matchedTitle: Bool
     }
 
     private enum TitleSignal {
@@ -237,7 +243,7 @@ public struct AgentDetector: Sendable {
     private static let agentProcessNames: [String: AgentType] = [
         "claude": .claudeCode,
         "pi": .pi,
-        "codex": .codex,
+        "codex": .codex
     ]
 
     private static func matchAgentType(argv: [String]) -> AgentType? {

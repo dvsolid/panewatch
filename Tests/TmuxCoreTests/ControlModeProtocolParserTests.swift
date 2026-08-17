@@ -14,7 +14,7 @@ import Testing
     @Test(arguments: [
         "%output %65 \u{1B}[38;5;10m",
         "%output %65 ",
-        "%output %9 multiple words in the payload",
+        "%output %9 multiple words in the payload"
     ])
     func arbitraryPayloadShapesStillExtractPaneId(line: String) {
         let event = ControlModeProtocolParser.parse(line)
@@ -33,7 +33,7 @@ import Testing
     @Test(arguments: [
         "%begin 1786664109 25370040 0",
         "%session-changed $12 ztest1",
-        "%some-future-notification with arbitrary args",
+        "%some-future-notification with arbitrary args"
     ])
     func nonOutputNonExitNotificationsClassifyAsOther(line: String) {
         let event = ControlModeProtocolParser.parse(line)

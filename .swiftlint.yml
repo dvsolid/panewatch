@@ -1,0 +1,36 @@
+excluded:
+  - .build
+
+# Default is 120/200. Audited every real violation before raising this: all of them were code
+# (zero comments), and almost all were single-expression AppKit builder calls
+# (NSRect(x:y:width:height:), memberwise inits) or test-fixture string literals that hard-wrapping
+# doesn't make more readable — it just fragments one coherent expression across lines. 200/250
+# still catches genuinely runaway lines; the one real outlier (a 255-char format-token string) was
+# restructured in source rather than accommodated here.
+line_length:
+  warning: 200
+  error: 250
+
+# x/y/a/b are geometry coordinates and lerp operands, `at` is a timestamp parameter, `ps` is a
+# fixture holding literal `ps` command output, `pi` is the Pi agent's actual enum case name,
+# `id` is Identifiable's required property name — all domain-idiomatic, not sloppy naming.
+identifier_name:
+  excluded:
+    - x
+    - y
+    - a
+    - b
+    - at
+    - ps
+    - pi
+    - id
+
+# Default is 50/100. This codebase's AppKit view/controller inits build and wire a whole view
+# hierarchy in one place rather than splitting into several once-only-called private setup
+# methods — that's a deliberate locality choice (the surrounding doc comments explain each piece
+# inline), not sprawl. Raised enough to cover the two ordinary cases found (59, 91 lines); the one
+# real outlier (HoverPreviewController's 139-line init, a much larger view) still needs its own
+# targeted disable comment rather than raising this further just to fit it.
+function_body_length:
+  warning: 100
+  error: 160

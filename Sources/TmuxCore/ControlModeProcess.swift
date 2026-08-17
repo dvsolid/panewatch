@@ -91,6 +91,10 @@ final class ControlModeLineReader: @unchecked Sendable {
         buffer.append(data)
         var lines: [String] = []
         while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            // Deliberately lossy: tmux control-mode output must never make a line vanish just
+            // because a byte in it wasn't valid UTF-8, so this replaces (U+FFFD) rather than
+            // the failable `String(bytes:encoding:)` SwiftLint would otherwise prefer here.
+            // swiftlint:disable:next optional_data_string_conversion
             lines.append(String(decoding: buffer[..<newlineIndex], as: UTF8.self))
             buffer.removeSubrange(buffer.startIndex...newlineIndex)
         }

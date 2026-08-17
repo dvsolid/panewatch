@@ -296,6 +296,7 @@ final class TileCardView {
     /// do, so it needs an explicit height to center rather than one measured from content.
     private static let badgeImageSize: CGFloat = 16
 
+    // swiftlint:disable function_parameter_count
     /// Left-aligned layout: icon+label row at the top (clipped short of the dot centered on
     /// that row), then the task-text row filling the remaining height down to the bottom
     /// padding. `width` is
@@ -313,6 +314,7 @@ final class TileCardView {
     /// nominal vertical band it always has (`rowTop`), so the task-text row below it is
     /// unaffected by this change.
     private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, width: CGFloat, dotFrame: NSRect) {
+        // swiftlint:enable function_parameter_count
         let height = cardSize.height
         let rowRightEdge = dotFrame.minX - 2
         let rowTop = height - padding - iconLabelRowHeight

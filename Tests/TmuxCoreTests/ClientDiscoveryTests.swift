@@ -109,7 +109,7 @@ private final class FakeTmuxGateway: TmuxGateway, @unchecked Sendable {
         let (_, discovery) = makeDiscovery(output: [
             "/dev/ttys056 widget-advisor",
             " widget-advisor",
-            "/dev/ttys050 wgt",
+            "/dev/ttys050 wgt"
         ].joined(separator: "\n"))
 
         let clients = try discovery.scan()

@@ -83,7 +83,7 @@ private let fakeDescendantInspector = FakeDescendantProcessInspector(argvByPID: 
     100: ["/usr/local/bin/claude"], // %1
     200: ["/usr/local/bin/pi"], // %2
     300: ["/usr/local/bin/claude"], // %3
-    400: ["/usr/local/bin/claude"], // %4
+    400: ["/usr/local/bin/claude"] // %4
 ])
 
 private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {

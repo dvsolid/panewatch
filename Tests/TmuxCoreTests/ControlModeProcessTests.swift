@@ -67,7 +67,7 @@ import Testing
             lock.unlock()
         }
 
-        pipe.fileHandleForWriting.write("%output %51 hello ".data(using: .utf8)!)
+        pipe.fileHandleForWriting.write(Data("%output %51 hello ".utf8))
 
         // Deterministic checkpoint: bounded wait for *absence* of a premature line. A reader
         // that (wrongly) emits on every raw chunk would flip this well inside the window.
@@ -78,7 +78,7 @@ import Testing
         }
         #expect(!firedPrematurely)
 
-        pipe.fileHandleForWriting.write("world\n".data(using: .utf8)!)
+        pipe.fileHandleForWriting.write(Data("world\n".utf8))
 
         let sawLine = waitUntil {
             lock.lock()

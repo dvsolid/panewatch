@@ -56,7 +56,7 @@ import Testing
             (.ghostty(pid: 1), "Ghostty"),
             (.iTerm2(pid: 2), "iTerm2"),
             (.terminalApp(pid: 3), "Terminal"),
-            (.cursor(pid: 4), "Cursor"),
+            (.cursor(pid: 4), "Cursor")
         ]
 
         let scripts = apps.map { app, expectedAppName -> String in
@@ -80,7 +80,7 @@ import Testing
     /// working-directory match. This only checks script *shape* (`activate` before both match
     /// clauses, both present, title before path) — the match actually working was verified live
     /// against the real, currently-installed Ghostty.
-    @Test func ghosttyScriptActivatesFirstThenTriesTitleThenWorkingDirectory() {
+    @Test func ghosttyScriptActivatesFirstThenTriesTitleThenWorkingDirectory() throws {
         let planner = SwitchActionPlanner()
         let client = AttachedClient(tty: "/dev/ttys030", owningApp: .ghostty(pid: 1))
 
@@ -92,9 +92,9 @@ import Testing
         #expect(script.contains("\"tmux attach -t ztest1\""))
         #expect(script.contains("\"/Users/user/Projects/acme/ztest1\""))
         #expect(script.contains("activate"))
-        let activateIndex = try! #require(script.range(of: "activate"))
-        let titleClauseIndex = try! #require(script.range(of: "tmux attach -t ztest1"))
-        let pathClauseIndex = try! #require(script.range(of: "/Users/user/Projects/acme/ztest1"))
+        let activateIndex = try #require(script.range(of: "activate"))
+        let titleClauseIndex = try #require(script.range(of: "tmux attach -t ztest1"))
+        let pathClauseIndex = try #require(script.range(of: "/Users/user/Projects/acme/ztest1"))
         #expect(activateIndex.lowerBound < titleClauseIndex.lowerBound)
         #expect(titleClauseIndex.lowerBound < pathClauseIndex.lowerBound)
     }

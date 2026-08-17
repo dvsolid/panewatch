@@ -21,7 +21,7 @@ public enum TmuxCore {
     public static let defaultTmuxPathCandidates = [
         "/opt/homebrew/bin/tmux",  // Apple Silicon Homebrew
         "/usr/local/bin/tmux",     // Intel Homebrew
-        "/usr/bin/tmux",           // system, rare
+        "/usr/bin/tmux"           // system, rare
     ]
 
     public static let defaultTmuxPath: String = resolveTmuxPath()

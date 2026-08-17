@@ -2,6 +2,11 @@ import Foundation
 import Testing
 @testable import TmuxCore
 
+// swiftlint:disable file_length
+// One cohesive suite covering ControlModeActivitySource's full acceptance-item list (see the
+// doc comment below) — splitting it purely to satisfy a line count would scatter related
+// coverage across files for no reader benefit.
+
 /// Fakes `ControlModeProcessLauncher`/`ControlModeProcess` (no real `tmux -C attach`
 /// subprocess) so `ControlModeActivitySource`'s pool/coalescing logic is exercised at the
 /// `ActivitySource` seam without depending on a live tmux server — mirrors
@@ -190,7 +195,7 @@ private final class FakeClock: @unchecked Sendable {
 /// `2026-08-15-control-mode-activity-source.md`): per-session Control Client spawn/reap driven
 /// by `setWatchedPanes`, and 250ms-per-pane `onOutput` coalescing. Reconnect-on-`%exit` and
 /// full-server-restart backoff are explicitly out of scope — TASK-027.
-@Suite struct ControlModeActivitySourceTests {
+@Suite struct ControlModeActivitySourceTests { // swiftlint:disable:this type_body_length
     // MARK: - Acceptance item 1: one Control Client per session, not per pane
 
     @Test func setWatchedPanesSpawnsExactlyOneClientPerNewSession() {

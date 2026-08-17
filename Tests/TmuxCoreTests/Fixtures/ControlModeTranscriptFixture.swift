@@ -16,5 +16,5 @@ let controlModeTranscriptFixture: [(line: String, expected: ControlModeEvent)] =
     ("%session-changed $12 ztest1", .other),
     ("%output %65 H", .output(paneId: "%65")),
     ("%output %65 E", .output(paneId: "%65")),
-    ("%output %65 L", .output(paneId: "%65")),
+    ("%output %65 L", .output(paneId: "%65"))
 ]

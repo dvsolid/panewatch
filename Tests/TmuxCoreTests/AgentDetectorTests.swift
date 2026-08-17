@@ -80,7 +80,7 @@ private func classify(
         25236: ["/usr/local/bin/pi"], // %29
         29302: ["/usr/local/bin/pi"], // %54
         8569: ["/usr/local/bin/claude"], // %9
-        54430: ["/usr/local/bin/claude"], // %51
+        54430: ["/usr/local/bin/claude"] // %51
     ])
 ) throws -> [AgentPane] {
     try AgentDetector(hostname: fixtureHostname, descendantInspector: descendantInspector)

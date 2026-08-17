@@ -21,3 +21,17 @@ jobs:
 
       - name: Test
         run: swift test
+
+  # Separate job, separate runner: GitHub-hosted macOS runners can't run Docker (no nested
+  # virtualization), and SwiftLint's Homebrew build can't load sourcekitd on a Command Line
+  # Tools-only Mac either (see CLAUDE.md), so this runs the same pinned image contributors use
+  # locally on a Linux runner instead.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SwiftLint
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work ghcr.io/realm/swiftlint:0.65.0 \
+            lint --strict --reporter github-actions-logging
