@@ -196,6 +196,13 @@ final class FloatingPanel: NSPanel {
         scrollView.frame = NSRect(x: 0, y: 0, width: content.bounds.width, height: content.bounds.height - Self.headerHeight)
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
+        // `autohidesScrollers` defaults to `false` — without it, AppKit draws the vertical
+        // scroller's track permanently (legacy scroller style), even when the tile list fits
+        // entirely within the panel's visible height and there's nothing to scroll to: a
+        // constant ~15pt grey bar along the trailing edge with no functional scroll behind it
+        // (user report: "looks like a scrollbar except there's no way to scroll"). `true` makes
+        // AppKit show/hide it based on whether the tile list actually overflows.
+        scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         content.addSubview(scrollView)
