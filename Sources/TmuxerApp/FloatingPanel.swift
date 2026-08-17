@@ -107,12 +107,37 @@ final class FloatingPanel: NSPanel {
         let material = NSVisualEffectView(frame: content.bounds)
         material.autoresizingMask = [.width, .height]
         material.material = .hudWindow
+        // Must stay `.behindWindow`, not `.withinWindow`: this window is fully transparent
+        // (`backgroundColor = .clear`, `isOpaque = false`) and `material` is the very first
+        // subview in it — `.withinWindow` blends with whatever window content sits *behind* a
+        // view, and there is none here, so a first attempt at `.withinWindow` rendered the
+        // entire panel invisible (confirmed live: `CGWindowListCopyWindowInfo` still reported
+        // the window onscreen, but a screenshot showed nothing at all). `TileCardView.swift`'s
+        // own per-Tile material can use `.withinWindow` only because *this* `.behindWindow`
+        // layer sits behind it, giving it something to blend against.
         material.blendingMode = .behindWindow
         material.state = .active
         material.wantsLayer = true
         material.layer?.cornerRadius = Self.cornerRadius
         material.layer?.masksToBounds = true
         content.addSubview(material)
+
+        // Opaque dark tint over the raw vibrancy, clipped to the same rounded rect. Without it,
+        // any strip `material` shows through with nothing opaque drawn on top — the ~9pt gutter
+        // beside each Tile (`horizontalMargin` in `render(_:)` below) — directly reflects
+        // `.behindWindow`'s blur of whatever sits on the *desktop* behind this window. Positioned
+        // next to a bright terminal window, that gutter read as a distinct light-grey smear
+        // running the height of the Tile column (user report: "lightest grey bar in the middle"
+        // — confirmed not part of the terminal app's own UI). This tint sits between `material`
+        // and everything else, damping that backdrop-dependent brightness to a uniform dark tone
+        // while still letting enough blur through to read as "frosted," not flat black.
+        let materialTint = NSView(frame: content.bounds)
+        materialTint.autoresizingMask = [.width, .height]
+        materialTint.wantsLayer = true
+        materialTint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        materialTint.layer?.cornerRadius = Self.cornerRadius
+        materialTint.layer?.masksToBounds = true
+        content.addSubview(materialTint)
 
         // Branding header, doubling as the drag surface for changing Dock Side (TASK-031) —
         // no longer purely decorative. Echoes the Menu Bar Icon's own `rectangle.stack` glyph
