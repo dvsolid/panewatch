@@ -132,15 +132,16 @@ import Testing
     // MARK: - The permanent, non-functional scroller SwiftTerm installs
 
     /// Mirrors `HoverPreviewPopup.showTerminal(_:)`: the terminal view is added to a superview
-    /// (`innerContent`) and given its bounds. `viewDidMoveToSuperview` is the hook
-    /// `ReadOnlyLocalProcessTerminalView` hides the scroller from, so this is the production
-    /// sequence, not a shortcut.
+    /// (`innerContent`) and given its bounds. Deliberately does *not* force a layout pass:
+    /// production sizes the pty (`sizeTerminal(toWindowRows:)` → `startProcess`) before any
+    /// layout runs, so the tests below must pin `viewDidMoveToSuperview` — the earlier of
+    /// `ReadOnlyLocalProcessTerminalView`'s two hide hooks — rather than passing on `layout()`
+    /// alone (confirmed by disabling each hook in turn).
     private func makeClientInstalledInAContainer() -> PreviewClient {
         let client = PreviewClient()
         let container = NSView(frame: Self.innerContentBounds)
         container.addSubview(client.terminalView)
         client.terminalView.frame = container.bounds
-        container.layoutSubtreeIfNeeded()
         return client
     }
 
