@@ -43,6 +43,25 @@ private final class NoOpActivitySource: ActivitySource, @unchecked Sendable {
     func setWatchedPanes(_ panes: [String: String]) {}
 }
 
+/// Test seam (TASK-004): descendant-process data is injected via a fake, never the real process
+/// table — `AgentDetector`'s default `ProcessTableDescendantInspector` shells out to the actual
+/// `/bin/ps`, which would make title-match corroboration (`AgentDetector.swift`'s `detectType`)
+/// depend on whatever happens to be running on the machine executing the test. Mirrors
+/// `AgentDetectorTests.swift`'s fake of the same name.
+private final class FakeDescendantProcessInspector: DescendantProcessInspector, @unchecked Sendable {
+    private let argvByPID: [Int32: [String]]
+
+    init(argvByPID: [Int32: [String]]) {
+        self.argvByPID = argvByPID
+    }
+
+    func descendantArgv(of pids: Set<Int32>) -> [Int32: [String]] {
+        var result: [Int32: [String]] = [:]
+        for pid in pids { result[pid] = argvByPID[pid] ?? [] }
+        return result
+    }
+}
+
 /// Every test wires the same fake-gateway-backed `PaneDiscovery`; only the spy test needs the
 /// gateway itself afterward, hence returning both.
 private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway: FakeTmuxGateway, discovery: PaneDiscovery) {
@@ -92,7 +111,10 @@ private func makeDiscovery(output: String = capturedPaneListFixture) -> (gateway
 /// those are asserted in `AgentDetectorTests`, not here; this test stays scoped to the label.)
 @Test func tileLabelIsSessionWindowPaneBuiltFromIndices() throws {
     let (_, discovery) = makeDiscovery()
-    let engine = StatusBarEngine(discovery: discovery, activitySource: NoOpActivitySource())
+    let detector = AgentDetector(
+        descendantInspector: FakeDescendantProcessInspector(argvByPID: [54430: ["/usr/local/bin/claude"]]) // %51
+    )
+    let engine = StatusBarEngine(discovery: discovery, detector: detector, activitySource: NoOpActivitySource())
 
     let tiles = try engine.reconcile()
 
