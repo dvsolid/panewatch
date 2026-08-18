@@ -47,10 +47,12 @@ public struct PreviewClientLifecycle: Sendable {
     /// long enough that at least one full `PollingActivitySource` probe cycle is guaranteed to
     /// land inside the window rather than racing it (the two run on independent clocks), short
     /// enough that a real burst of agent output landing right as a hover starts or ends isn't
-    /// swallowed for long. `TmuxCore.defaultProbeInterval` plus a fixed margin for scheduling
-    /// jitter, not a multiple of it — the margin only needs to cover jitter, not a whole extra
-    /// cycle.
-    static let zoomActivityMuteWindow: TimeInterval = TmuxCore.defaultProbeInterval + 2
+    /// swallowed for long. Shares its formula (and now its value) with
+    /// `TmuxCore.defaultAttachReplaySettleWindow` — both cover "one probe cycle plus scheduling
+    /// margin" for a self-inflicted transient, just triggered by different mechanisms (a zoom
+    /// toggle here, a bare-pane-ID attach's replay there) — so this references that single
+    /// source of truth instead of recomputing the formula.
+    static let zoomActivityMuteWindow: TimeInterval = TmuxCore.defaultAttachReplaySettleWindow
 
     public let gateway: any TmuxGateway
     private let activityMuter: (any ActivityMuter)?

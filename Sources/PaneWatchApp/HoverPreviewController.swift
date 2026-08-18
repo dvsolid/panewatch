@@ -450,6 +450,7 @@ final class HoverPreviewController: NSResponder {
         let ttyOwnerResolver = ttyOwnerResolver
         let switchPlanner = switchPlanner
         let scriptRunner = scriptRunner
+        let activityMuter = activityMuter
 
         Task.detached {
             teardown()
@@ -461,7 +462,8 @@ final class HoverPreviewController: NSResponder {
                 clientDiscovery: clientDiscovery,
                 ttyOwnerResolver: ttyOwnerResolver,
                 switchPlanner: switchPlanner,
-                scriptRunner: scriptRunner
+                scriptRunner: scriptRunner,
+                activityMuter: activityMuter
             )
         }
     }
@@ -480,18 +482,24 @@ final class HoverPreviewController: NSResponder {
         clientDiscovery: ClientDiscovery,
         ttyOwnerResolver: any TTYOwnerResolver,
         switchPlanner: SwitchActionPlanner,
-        scriptRunner: any AppleScriptRunner
+        scriptRunner: any AppleScriptRunner,
+        activityMuter: (any ActivityMuter)?
     ) {
         // swiftlint:enable function_parameter_count
         // The pane can have vanished between the double-click and this resolve (e.g. the agent
         // exited) — silently do nothing rather than act on stale/absent data, the same posture
         // `PreviewClientLifecycle.prepareGroupSession` takes for a dead pane.
-        guard let target = resolveTarget(paneID: paneID, paneDiscovery: paneDiscovery) else { return }
+        guard let (target, panes) = resolveTarget(paneID: paneID, paneDiscovery: paneDiscovery) else { return }
         let attachedClient = resolveAttachedClient(
             target: target,
             clientDiscovery: clientDiscovery,
             ttyOwnerResolver: ttyOwnerResolver
         )
+        // TASK-036: every pane in the target's session is in the blast radius of the open-new
+        // path's bare-pane-ID attach (root cause, this task's body) — computed once here, off
+        // the one `PaneDiscovery.scan()` `resolveTarget` already ran, so neither
+        // `performOpenNew` call site below re-scans (avoids a second scan / TOCTOU race).
+        let matePaneIds = SwitchInvocation.sessionMatePaneIds(of: target, in: panes)
 
         let plan = switchPlanner.plan(target: target, attachedClient: attachedClient)
         FileHandle.standardError.write(Data("panewatch: switch plan for \(paneID) -> \(plan), attachedClient=\(String(describing: attachedClient))\n".utf8))
@@ -518,22 +526,40 @@ final class HoverPreviewController: NSResponder {
                 // happens. Ghostty's open-new is a plain process launch with no
                 // Automation-permission dependency at all — the only one of the three immune
                 // to this exact failure mode, which is why it's the unconditional fallback
-                // here even though the owning app is known.
-                performOpenNew(preferredApp: nil, tmuxPath: tmuxPath, paneId: target.paneId, scriptRunner: scriptRunner)
+                // here even though the owning app is known. This still attaches by bare pane
+                // ID (TASK-036 root cause), so it needs the same mute `performOpenNew` arms.
+                performOpenNew(
+                    preferredApp: nil,
+                    tmuxPath: tmuxPath,
+                    paneId: target.paneId,
+                    scriptRunner: scriptRunner,
+                    matePaneIds: matePaneIds,
+                    activityMuter: activityMuter
+                )
             }
         case .openNew(let paneId):
-            performOpenNew(preferredApp: attachedClient?.owningApp, tmuxPath: tmuxPath, paneId: paneId, scriptRunner: scriptRunner)
+            performOpenNew(
+                preferredApp: attachedClient?.owningApp,
+                tmuxPath: tmuxPath,
+                paneId: paneId,
+                scriptRunner: scriptRunner,
+                matePaneIds: matePaneIds,
+                activityMuter: activityMuter
+            )
         }
     }
 
     /// Finds the `RawPane` matching `paneID` in a fresh `PaneDiscovery.scan()` and builds its
     /// `PaneTarget` — this task's notes are explicit that this lookup gets no dedicated
     /// `TmuxCore` module of its own, just a filter over an existing scan at double-click time.
-    nonisolated private static func resolveTarget(paneID: String, paneDiscovery: PaneDiscovery) -> PaneTarget? {
+    /// Returns the full scanned pane list alongside the target (TASK-036) so callers needing
+    /// session-mate context (`SwitchInvocation.sessionMatePaneIds`) don't have to re-scan.
+    nonisolated private static func resolveTarget(paneID: String, paneDiscovery: PaneDiscovery) -> (target: PaneTarget, panes: [RawPane])? {
         guard let panes = try? paneDiscovery.scan(), let pane = panes.first(where: { $0.paneId == paneID }) else {
             return nil
         }
-        return PaneTarget(paneId: pane.paneId, sessionName: pane.sessionName, windowIndex: pane.windowIndex, paneIndex: pane.paneIndex, currentPath: pane.currentPath)
+        let target = PaneTarget(paneId: pane.paneId, sessionName: pane.sessionName, windowIndex: pane.windowIndex, paneIndex: pane.paneIndex, currentPath: pane.currentPath)
+        return (target, panes)
     }
 
     /// Matches a fresh `ClientDiscovery.scan()` by **session name**, not "the only client" or
@@ -556,6 +582,7 @@ final class HoverPreviewController: NSResponder {
     /// `SwitchInvocation.openNewAction` default to Ghostty.
     nonisolated private static let ghosttyBundleID = "com.mitchellh.ghostty"
 
+    // swiftlint:disable function_parameter_count
     /// SPEC §4 path 2, "open a new terminal attached to the pane" — dispatches
     /// `SwitchInvocation.openNewAction`'s two possible mechanisms. Best-effort past this point
     /// (the fallback of the fallback has nowhere further to go per this task's acceptance
@@ -570,8 +597,28 @@ final class HoverPreviewController: NSResponder {
         preferredApp: SupportedTerminalApp?,
         tmuxPath: String,
         paneId: String,
-        scriptRunner: any AppleScriptRunner
+        scriptRunner: any AppleScriptRunner,
+        matePaneIds: [String],
+        activityMuter: (any ActivityMuter)?
     ) {
+        // swiftlint:enable function_parameter_count
+        // TASK-036 root cause: this function's attach mechanism (both branches below) is a
+        // bare-pane-ID `tmux attach -t %<id>`, which makes the server replay every
+        // Kitty-keyboard-protocol pane's mode-enable escape sequences to the newly-attaching
+        // client as genuine `%output` activity — for every pane sharing this session, not only
+        // `paneId`. Armed here, as the very first statement, before either branch's
+        // process/AppleScript actually runs — mirrors `PreviewClientLifecycle
+        // .prepareGroupSession`'s `muteActivity(paneID:)` ordering exactly (that type's own doc
+        // comment: an earlier version muting at the end of the function left the *first* tmux
+        // command's replay unmuted, live-verified as a real race, not a hypothetical one). Both
+        // of this function's callers attach by bare pane ID (the `.openNew` plan and the
+        // Automation-denied fallback out of `.focusExisting`'s catch), so both need this same
+        // protection — that's why it lives here rather than in just one call site.
+        let until = Date().addingTimeInterval(TmuxCore.defaultAttachReplaySettleWindow)
+        for mateId in matePaneIds {
+            activityMuter?.muteOutput(paneId: mateId, until: until)
+        }
+
         let resolvedApp = resolveOpenNewPreferredApp(preferredApp)
         switch SwitchInvocation.openNewAction(preferredApp: resolvedApp, tmuxPath: tmuxPath, paneId: paneId) {
         case .launchProcess(let executable, let arguments):

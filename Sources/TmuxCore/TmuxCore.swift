@@ -43,4 +43,19 @@ public enum TmuxCore {
     /// separate subprocess spawn from the per-pane `capturePane` polling, and new/closed
     /// sessions don't need probe-cadence responsiveness.
     public static let defaultDiscoveryInterval: TimeInterval = 30
+
+    /// How long a fresh tmux attach's own replayed control-mode escape sequences are muted from
+    /// `ActivityStateStore` — armed by the app itself, *before* the attach command runs, on the
+    /// specific paths that attach by bare pane ID (`HoverPreviewController.performOpenNew`,
+    /// TASK-036's root cause). Not to be confused with
+    /// `ControlModeActivitySource.postAttachSettleWindow`: that one is a *reactive* 1s re-arm
+    /// triggered by an observed `.other`-classified line (`%session-changed`, ...) after an
+    /// attach whose replay ordering is trusted; this one is armed proactively because bare
+    /// pane-ID attach breaks that ordering assumption — the replay `%output` lines arrive
+    /// *before* any `.other` line ever does, so there is nothing for `postAttachSettleWindow` to
+    /// react to in time. Same formula `PreviewClientLifecycle.zoomActivityMuteWindow` already
+    /// used before this task gave it a shared home: one full `defaultProbeInterval` probe cycle
+    /// plus a fixed margin for scheduling jitter (not a multiple of the cycle — the margin only
+    /// needs to cover jitter, not a whole extra cycle).
+    public static let defaultAttachReplaySettleWindow: TimeInterval = defaultProbeInterval + 2
 }

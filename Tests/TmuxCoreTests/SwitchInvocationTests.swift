@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TmuxCore
 
@@ -80,5 +81,35 @@ import Testing
         }
         #expect(script.contains("tell application \"Terminal\""))
         #expect(script.contains("/opt/homebrew/bin/tmux attach -t %51"))
+    }
+
+    /// TASK-036 acceptance item 2: the pane IDs a bare-pane-ID attach's replay blast radius
+    /// covers — every pane sharing the target's session, including the target pane itself
+    /// (muting it too is harmless, and avoids a special case), excluding a different session's
+    /// panes entirely, even if that session shares the same session *group* name prefix.
+    @Test func sessionMatePaneIdsReturnsExactlyTheTargetsSessionPanes() {
+        let target = PaneTarget(paneId: "%51", sessionName: "wgt", windowIndex: 2, paneIndex: 1, currentPath: "/Users/user/Projects/acme/quotegen")
+        let panes = [
+            makeRawPane(paneId: "%51", sessionName: "wgt"),
+            makeRawPane(paneId: "%52", sessionName: "wgt"),
+            makeRawPane(paneId: "%60", sessionName: "wgt-2")
+        ]
+
+        #expect(SwitchInvocation.sessionMatePaneIds(of: target, in: panes) == ["%51", "%52"])
+    }
+
+    private func makeRawPane(paneId: String, sessionName: String) -> RawPane {
+        RawPane(
+            sessionName: sessionName,
+            windowIndex: 2,
+            paneIndex: 1,
+            paneId: paneId,
+            title: "",
+            command: "node",
+            pid: 54430,
+            tty: "/dev/ttys051",
+            currentPath: "/Users/user/Projects/acme/quotegen",
+            windowActivityAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
     }
 }

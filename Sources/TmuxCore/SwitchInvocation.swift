@@ -51,4 +51,18 @@ public enum SwitchInvocation {
         }
         return build(tmuxPath, paneId)
     }
+
+    /// The blast radius a bare-pane-ID attach's control-mode replay covers (TASK-036's root
+    /// cause): every pane sharing `target`'s session, so the caller can arm
+    /// `ActivityMuter.muteOutput` on all of them before running the attach. Deliberately
+    /// includes `target`'s own pane id — muting it too is harmless, and excluding it would just
+    /// be a special case with no benefit. Deliberately unfiltered by agent-type/Kitty-protocol
+    /// state: the app has no way to know in advance which panes have the protocol enabled, and
+    /// muting a non-displayed pane's `ActivityStateStore` entry is a no-op anyway. A pure
+    /// function over an already-scanned `[RawPane]` — no process spawn of its own, so the
+    /// caller threads through one `PaneDiscovery.scan()` result rather than this triggering a
+    /// second, racy scan.
+    public static func sessionMatePaneIds(of target: PaneTarget, in panes: [RawPane]) -> [String] {
+        panes.filter { $0.sessionName == target.sessionName }.map(\.paneId)
+    }
 }
