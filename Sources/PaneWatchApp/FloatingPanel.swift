@@ -331,7 +331,10 @@ final class FloatingPanel: NSPanel {
         // only the frame's own breathing room around the Tiles grows. Still respects the
         // legacy-scroller clamp: see `TileCardView.cardSize`'s doc comment for the
         // 130 -> 107pt-under-`.legacy` math (unaffected by this change, same margin delta).
-        let width: CGFloat = 138
+        //
+        // TASK-035: widened 138 -> 150pt in lockstep with `TileCardView.cardSize.width`'s own
+        // 120 -> 132pt bump, preserving the same 18pt margin between the two.
+        let width: CGFloat = 150
         guard let visible = screen?.visibleFrame else {
             // No screen available (e.g. headless test host): the exact x doesn't matter, so this
             // stays left-aligned regardless of `side` rather than branching for a case with no

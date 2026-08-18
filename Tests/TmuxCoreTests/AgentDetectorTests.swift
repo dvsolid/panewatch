@@ -74,7 +74,9 @@ private let ambiguousPaneRow = "%99|ops-auto|1|main|4|node|dev-server|9001|/dev/
 /// corroboration doesn't demote them and every test written before TASK-013 keeps passing for
 /// the same reason it always did (the title), not because corroboration happens to be
 /// type-agnostic. A test exercising corroboration itself configures its own inspector instead.
-private func classify(
+/// Internal (not `private`), deliberately — `TileStateTests` (TASK-035) reuses this exact
+/// classify-with-fake-descendants setup rather than duplicating the seeded pid/argv data.
+func classify(
     _ output: String,
     descendantInspector: any DescendantProcessInspector = FakeDescendantProcessInspector(argvByPID: [
         25236: ["/usr/local/bin/pi"], // %29
@@ -111,6 +113,15 @@ private func classify(
         #expect(pi.type == .pi)
         #expect(pi.type.badge == .text("π"))
         #expect(pi.label == "widget-advisor:1.2")
+    }
+
+    /// TASK-035 acceptance item 2: `RawPane.currentPath` survives classification onto
+    /// `AgentPane.currentPath` unchanged, the same way `sessionName`/`windowIndex` already do.
+    @Test func currentPathSurvivesFromRawPaneToAgentPane() throws {
+        let panes = try classify(capturedPaneListFixture)
+
+        let pi = try #require(panes.first { $0.id == "%29" })
+        #expect(pi.currentPath == "/Users/user/Projects/acme/widget-advisor")
     }
 
     /// Acceptance item 3: a Claude Code pane (title starting `✳ `) appears with the Claude

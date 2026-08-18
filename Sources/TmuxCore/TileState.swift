@@ -8,6 +8,10 @@ public struct TileState: Identifiable, Equatable, Sendable {
     public let badge: BadgeGlyph
     public let taskText: String?
     public let phase: ActivityPhase
+    /// The Directory Row's text (TASK-035, feature spec § Architecture) — the leaf name of
+    /// `pane.currentPath`, computed once here the same way `badge` is derived from
+    /// `pane.type.badge`, so `TileCardView` only ever reads a ready-made presentation value.
+    public let directoryLabel: String
 
     public init(pane: AgentPane, phase: ActivityPhase) {
         id = pane.id
@@ -15,5 +19,6 @@ public struct TileState: Identifiable, Equatable, Sendable {
         badge = pane.type.badge
         taskText = pane.taskText
         self.phase = phase
+        directoryLabel = DirectoryLabel.brief(of: pane.currentPath)
     }
 }

@@ -52,7 +52,20 @@ final class TileCardView {
     /// too). This supersedes the specific 92pt figure from TASK-007's acceptance criteria;
     /// TASK-007's own acceptance ("panel 92pt wide") was itself only ever an input sized to fit
     /// TASK-008's original 84pt card, not an independent constraint.
-    static let cardSize = NSSize(width: 120, height: 64)
+    ///
+    /// TASK-035: height 64 -> 80pt, the same versioned-constant-bump shape as the width history
+    /// above — every Tile is still exactly `cardSize.height` tall (no per-instance variation),
+    /// so this doesn't touch the "height is never adaptive" meaning of `init(width:)`'s own doc
+    /// comment. The added 16pt fits the new Directory Row (`directoryRowHeight` + `rowSpacing`),
+    /// whose own row order moved (see `layout(...)`'s doc comment) but whose total footprint
+    /// didn't change again after that move. `taskTextHeight` stays fixed at its pre-TASK-035
+    /// size so the 2-line clamp is visually unchanged.
+    ///
+    /// TASK-035 (direct user feedback after first look): width 120 -> 132pt, on request ("make
+    /// the tile wider a bit") — the same versioned-constant-bump shape as this property's own
+    /// width history above. `FloatingPanel`'s panel width moves with it (138 -> 150pt),
+    /// preserving the same 18pt margin between the two the prior 138/120 pair already had.
+    static let cardSize = NSSize(width: 132, height: 80)
 
     private static let cornerRadius: CGFloat = 10
     private static let padding: CGFloat = 8
@@ -87,6 +100,15 @@ final class TileCardView {
     private static let pulseDuration = TmuxCore.defaultBlinkPeriod / 2
     private static let rowSpacing: CGFloat = 4
     private static let iconLabelRowHeight: CGFloat = 16
+    /// TASK-035: the task-text row's height, fixed rather than "whatever's left above the
+    /// bottom padding" (the pre-TASK-035 shape) — it must stay constant now that the Directory
+    /// Row claims its own space below it, so the 2-line clamp's actual pixel height (and
+    /// therefore its wrapping behavior) is unchanged from before this task.
+    private static let taskTextHeight: CGFloat = 28
+    /// TASK-035: the Directory Row's fixed height — a single-line label, sized generously for
+    /// a 9pt font rather than measured from `intrinsicContentSize` at `init` time, since no
+    /// `NSTextField` instance exists yet when `cardSize` (a `static let`) is computed.
+    private static let directoryRowHeight: CGFloat = 12
     private static let badgeWidth: CGFloat = 18
     /// TASK-012 (acceptance item 4): how strongly `tintLayer`'s fill carries `tile.phase.color`.
     /// Chosen against the brightest case (`ActivityPhase.blinking`'s saturated orange) so the
@@ -121,6 +143,9 @@ final class TileCardView {
     private let badgeImageView: NSImageView
     private let nameLabel: NSTextField
     private let taskLabel: NSTextField
+    /// TASK-035: the Directory Row — `tile.directoryLabel`'s leaf directory name, light-yellow
+    /// per user request, below `taskLabel`.
+    private let directoryRowLabel: NSTextField
     /// Tracks the last-applied badge so `apply(_:blinkOn:)` can skip re-resolving the SF
     /// Symbol/text content (and the `badgeLabel`/`badgeImageView` visibility swap) on every
     /// call, matching the existing `stringValue`-diffing pattern for `nameLabel`/`taskLabel`.
@@ -199,6 +224,15 @@ final class TileCardView {
         task.cell?.wraps = true
         card.addSubview(task)
 
+        // TASK-035: light yellow per user request — distinct from `name` (white) and `task`
+        // (white at 60% alpha), the card's two other text colors, so the Directory Row reads
+        // as its own kind of information rather than a dimmer task-text continuation.
+        let directoryRow = NSTextField(labelWithString: "")
+        directoryRow.font = .systemFont(ofSize: 9)
+        directoryRow.textColor = NSColor(calibratedRed: 0.97, green: 0.87, blue: 0.45, alpha: 0.9)
+        directoryRow.lineBreakMode = .byTruncatingTail
+        card.addSubview(directoryRow)
+
         let indicator = NSView(frame: Self.dotFrame(size: Self.dotSteadySize, center: center))
         indicator.wantsLayer = true
         // `dotMaxSize / 2` rather than the current frame's own half-width: CALayer clamps a
@@ -215,11 +249,12 @@ final class TileCardView {
         badgeImageView = badgeImage
         nameLabel = name
         taskLabel = task
+        directoryRowLabel = directoryRow
         dotCenter = center
 
         // Laid out against the pulse's widest extent, not the steady size, so the badge/name
         // row never touches the dot even at the top of its pulse.
-        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, width: width, dotFrame: Self.dotFrame(size: Self.dotMaxSize, center: center))
+        Self.layout(badge: badge, badgeImage: badgeImage, name: name, task: task, directory: directoryRow, width: width, dotFrame: Self.dotFrame(size: Self.dotMaxSize, center: center))
     }
 
     /// Applies one Tile's badge/label/task-text, card tint, and Activity Phase dot. The sole
@@ -252,6 +287,10 @@ final class TileCardView {
         let taskText = tile.taskText ?? ""
         if taskLabel.stringValue != taskText {
             taskLabel.stringValue = taskText
+        }
+        let directoryText = "▸ \(tile.directoryLabel)"
+        if directoryRowLabel.stringValue != directoryText {
+            directoryRowLabel.stringValue = directoryText
         }
 
         let phaseColor = NSColor(tile.phase.color)
@@ -311,13 +350,17 @@ final class TileCardView {
     /// 13pt badge glyph and a 10pt semibold name never had a reason to optically center the same
     /// way inside an identical 16pt box, but a box sized to each one's own metrics and centered
     /// on a shared line does, by construction. `iconLabelRowHeight` still reserves the same
-    /// nominal vertical band it always has (`rowTop`), so the task-text row below it is
-    /// unaffected by this change.
-    private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, width: CGFloat, dotFrame: NSRect) {
+    /// nominal vertical band it always has (up against `headerRowCenterY`), so the task-text
+    /// row below it is unaffected by this change.
+    ///
+    /// TASK-035: `directory` (the Directory Row) is a third parameter. On direct user feedback
+    /// after first look, it sits right below the header row (not bottommost) — `task` moves
+    /// down below `directory` instead. `task`'s frame is `taskTextHeight` tall (a fixed
+    /// constant) rather than filling every pixel down to the bottom padding, freeing exactly
+    /// `directoryRowHeight + rowSpacing` for `directory` between the header row and `task`.
+    private static func layout(badge: NSTextField, badgeImage: NSImageView, name: NSTextField, task: NSTextField, directory: NSTextField, width: CGFloat, dotFrame: NSRect) {
         // swiftlint:enable function_parameter_count
-        let height = cardSize.height
         let rowRightEdge = dotFrame.minX - 2
-        let rowTop = height - padding - iconLabelRowHeight
         let centerY = headerRowCenterY
 
         let badgeHeight = badge.intrinsicContentSize.height
@@ -333,8 +376,10 @@ final class TileCardView {
         )
 
         let taskY = padding
-        let taskHeight = max(rowTop - rowSpacing - taskY, 0)
-        task.frame = NSRect(x: padding, y: taskY, width: width - padding * 2, height: taskHeight)
+        task.frame = NSRect(x: padding, y: taskY, width: width - padding * 2, height: taskTextHeight)
+
+        let directoryY = taskY + taskTextHeight + rowSpacing
+        directory.frame = NSRect(x: padding, y: directoryY, width: width - padding * 2, height: directoryRowHeight)
     }
 }
 

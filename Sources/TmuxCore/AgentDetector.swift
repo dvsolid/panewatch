@@ -44,6 +44,9 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
     /// output — see `windowActivityAt`'s doc comment on `RawPane` for why that's window-scoped,
     /// not pane-scoped.
     public let windowIndex: Int
+    /// Carried through from `RawPane.currentPath`, same reasoning as `sessionName`/
+    /// `windowIndex`: feeds `TileState.directoryLabel` (TASK-035) via `DirectoryLabel.brief(of:)`.
+    public let currentPath: String
 
     /// `label` is built from `windowIndex`/`paneIndex`, never `windowName` — SPEC §3.4: dotted
     /// window names make `window_name` ambiguous. `taskText` is only ever non-nil for
@@ -59,6 +62,7 @@ public struct AgentPane: Identifiable, Equatable, Sendable {
         windowActivityAt = pane.windowActivityAt
         sessionName = pane.sessionName
         windowIndex = pane.windowIndex
+        currentPath = pane.currentPath
         if type == .claudeCode && matchedTitle {
             taskText = String(pane.title.dropFirst(claudeCodeTitlePrefix.count))
         } else {
