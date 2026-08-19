@@ -58,4 +58,13 @@ public enum TmuxCore {
     /// plus a fixed margin for scheduling jitter (not a multiple of the cycle — the margin only
     /// needs to cover jitter, not a whole extra cycle).
     public static let defaultAttachReplaySettleWindow: TimeInterval = defaultProbeInterval + 2
+
+    /// How long `ActivityStateStore.muteAllOutput` suppresses activity for every pane after the
+    /// Mac wakes from sleep (`StatusBarShell.systemDidWake`) — the empirical basis is Claude
+    /// Code's own reconnect-after-sleep banner, observed live (control-mode capture) firing
+    /// ~60s after wake, followed by a full screen redraw as it reconnects. Unlike sibling
+    /// constants such as `defaultAttachReplaySettleWindow` (7s, live-verified exact), this one
+    /// is a best-effort estimate with margin above the observed ~60s, meant to be tuned from
+    /// experience rather than a precisely-derived value.
+    public static let defaultWakeMuteWindow: TimeInterval = 90
 }

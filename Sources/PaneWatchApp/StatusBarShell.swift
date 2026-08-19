@@ -77,6 +77,20 @@ final class StatusBarShell: NSObject {
         phaseRefreshTimer = Timer.scheduledTimer(withTimeInterval: TmuxCore.defaultProbeInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshPhases() }
         }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil
+        )
+    }
+
+    /// TASK-037: after the Mac wakes from sleep, Claude Code's own reconnect-after-sleep banner
+    /// and screen redraw are genuine bytes, correctly reported as activity by
+    /// `ControlModeActivitySource` — this mute is a deliberate tradeoff on top of correct
+    /// detection, not a bug fix for broken detection. See `TmuxCore.defaultWakeMuteWindow` and
+    /// `ActivityStateStore.muteAllOutput` for the full rationale. No explicit `removeObserver`
+    /// needed — `StatusBarShell` lives for the whole process lifetime (owned by `AppDelegate`),
+    /// same as the untorn-down `discoveryTimer`/`phaseRefreshTimer`.
+    @objc private func systemDidWake() {
+        engine.activityStateStore.muteAllOutput(until: Date().addingTimeInterval(TmuxCore.defaultWakeMuteWindow))
     }
 
     /// Re-runs discovery and renders the reconciled Tile list. The only call that spawns

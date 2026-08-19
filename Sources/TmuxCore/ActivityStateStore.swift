@@ -14,6 +14,9 @@ public final class ActivityStateStore: @unchecked Sendable {
     private var lastOutputAt: [String: Date] = [:]
     /// Per-pane deadline before which `recordOutput` is ignored — see `muteOutput(paneId:until:)`.
     private var mutedUntil: [String: Date] = [:]
+    /// Pane-agnostic deadline before which `recordOutput` is ignored for every pane — see
+    /// `muteAllOutput(until:)`.
+    private var muteAllUntil: Date?
     private let lock = NSLock()
 
     public init(
@@ -29,6 +32,9 @@ public final class ActivityStateStore: @unchecked Sendable {
     public func recordOutput(paneId: String, at date: Date) {
         lock.lock()
         defer { lock.unlock() }
+        if let allDeadline = muteAllUntil, date < allDeadline {
+            return
+        }
         if let deadline = mutedUntil[paneId], date < deadline {
             return
         }
@@ -55,6 +61,28 @@ public final class ActivityStateStore: @unchecked Sendable {
             return
         }
         mutedUntil[paneId] = until
+    }
+
+    /// Suppresses `recordOutput` for *every* pane up to (not including) `until` — extends rather
+    /// than shortens an existing global mute, same merge-not-cut-short semantics as
+    /// `muteOutput(paneId:until:)`.
+    ///
+    /// Exists for `StatusBarShell.systemDidWake`: after the Mac wakes from sleep, the Claude
+    /// Code CLI's own reconnect-after-sleep banner and screen redraw are genuine bytes, correctly
+    /// relayed by tmux and correctly reported as activity by `ControlModeActivitySource` —
+    /// nothing in the detection pipeline is broken. This mute is a deliberate, pane-agnostic
+    /// tradeoff on top of that correct detection: every pane redraws around the same wake event,
+    /// so a single global deadline covers all of them without `StatusBarShell` having to track
+    /// which panes exist. Unlike `muteOutput`'s per-pane hover-preview-zoom use case — a known
+    /// self-inflicted repaint on one specific pane — this swallows genuine activity that happens
+    /// to start within the same window, an accepted tradeoff for this use case.
+    public func muteAllOutput(until: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = muteAllUntil, existing >= until {
+            return
+        }
+        muteAllUntil = until
     }
 
     /// Records output for `paneId` unconditionally, ignoring any active `muteOutput` deadline —

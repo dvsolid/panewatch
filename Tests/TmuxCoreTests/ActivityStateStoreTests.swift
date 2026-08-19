@@ -144,6 +144,66 @@ private let referenceDate = Date(timeIntervalSince1970: 1_700_000_000)
     #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(46)) == .ready)
 }
 
+/// `muteAllOutput`'s reason for existing (`StatusBarShell.systemDidWake`): a global mute must
+/// suppress `recordOutput` pane-agnostically, not just for panes individually muted via
+/// `muteOutput` — the falsifiable distinction from `mutedOutputIsIgnoredUntilTheMuteWindowEnds`
+/// above, which only proves the per-pane path.
+@Test func muteAllOutputSuppressesRecordOutputAcrossMultipleUnrelatedPanes() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+    store.recordOutput(paneId: "%2", at: referenceDate)
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(50)) == .ready)
+    #expect(store.phase(for: "%2", now: referenceDate.addingTimeInterval(50)) == .ready)
+
+    store.muteAllOutput(until: referenceDate.addingTimeInterval(60))
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(55))
+    store.recordOutput(paneId: "%2", at: referenceDate.addingTimeInterval(55))
+
+    // Falsifiable: either recordOutput taking effect here would reset its pane to `.blinking`
+    // at this `now` — neither pane was ever individually muted via `muteOutput`.
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(56)) == .ready)
+    #expect(store.phase(for: "%2", now: referenceDate.addingTimeInterval(56)) == .ready)
+}
+
+/// Mirrors `muteOutputExtendsRatherThanShortensAnExistingMute`'s shape for the global mute.
+@Test func muteAllOutputExtendsRatherThanShortensAnExistingMute() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+
+    store.muteAllOutput(until: referenceDate.addingTimeInterval(60))
+    store.muteAllOutput(until: referenceDate.addingTimeInterval(30))
+
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(45))
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(46)) == .ready)
+}
+
+/// `recordOutput` timestamped at/after the global mute deadline is recorded normally — mirrors
+/// the per-pane deadline-boundary behavior asserted in
+/// `mutedOutputIsIgnoredUntilTheMuteWindowEnds`.
+@Test func recordOutputAtOrAfterGlobalMuteDeadlineIsRecordedNormally() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+    store.muteAllOutput(until: referenceDate.addingTimeInterval(60))
+
+    store.recordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(60))
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(61)) == .blinking)
+}
+
+/// `forceRecordOutput` must still bypass the global mute, same as it already bypasses the
+/// per-pane one (`forceRecordOutputIgnoresAnActiveMute`).
+@Test func forceRecordOutputIgnoresAnActiveGlobalMute() {
+    let store = ActivityStateStore(blinkWindow: 10, readyWindow: 90, fadeWindow: 3600)
+    store.recordOutput(paneId: "%1", at: referenceDate)
+    store.muteAllOutput(until: referenceDate.addingTimeInterval(60))
+
+    // Falsifiable: `recordOutput` at this same instant would be dropped by the active global
+    // mute (per `recordOutputAtOrAfterGlobalMuteDeadlineIsRecordedNormally` above) —
+    // `forceRecordOutput` must not be.
+    store.forceRecordOutput(paneId: "%1", at: referenceDate.addingTimeInterval(55))
+
+    #expect(store.phase(for: "%1", now: referenceDate.addingTimeInterval(56)) == .blinking)
+}
+
 /// Bug fix: an Inline Reply sent while `PreviewClientLifecycle`'s zoom mute is still covering
 /// the pane (the popup opened moments before the reply was sent) must still make the Tile show
 /// as active immediately, not wait out that mute window — `forceRecordOutput` is the seam
