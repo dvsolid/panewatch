@@ -1,3 +1,5 @@
+import Foundation
+
 /// The single ordered registry of every `TerminalAppProfile` — the one place that answers
 /// "which app owns this basename," "what does this app's focus-script/open-new mechanism look
 /// like," and "what's the default (and preference-resolved) open-new target."
@@ -13,15 +15,19 @@ public enum TerminalAppCatalog {
     /// `terminal` class, so unlike iTerm2/Terminal.app there's no exact identifier to search
     /// by. It does expose a `focus` command that brings a specific `terminal`'s window/tab to
     /// front plus `name` (the tab's title) and `working directory` on each terminal. Best-effort
-    /// match, in order: 1) `name` equals `"tmux attach -t <session>"` — exactly what a
-    /// freshly-opened attach tab is titled, before tmux's own dynamic title-setting (if any)
-    /// overwrites it; 2) `working directory` equals the pane's own `pane_current_path` —
-    /// survives a renamed tab, but isn't unique when multiple panes share a cwd (picks
-    /// whichever terminal Ghostty's `first` returns). `activate` always runs first,
-    /// unconditionally — `focus` alone only switches the target window/tab *within* Ghostty's
-    /// own window ordering; it does not raise the app above other apps' windows when Ghostty
-    /// isn't already frontmost. When neither match clause finds a terminal, `activate` alone
-    /// still surfaces the app.
+    /// match, in order (`ghosttyFocusScript`): 1) `name` equals `"tmux attach -t <session>"`,
+    /// `"tmux new-session -s <session>"`, or `"tmux new-session -A -s <session>"` — whichever
+    /// launch command actually opened the tab is exactly what it's titled, frozen there (this
+    /// environment does not do tmux's own dynamic title-setting, TASK-038 — live-confirmed);
+    /// 2) `working directory` equals the pane's own `pane_current_path`, or — TASK-038 — an
+    /// alternate candidate with a home-relative symlink prefix swapped back in
+    /// (`symlinkAliasedCandidatePath`), for when the shell's actual `$PWD` never resolved
+    /// through a symlink tmux's canonical path already resolved past. Neither working-directory
+    /// candidate is unique when multiple panes share a cwd (picks whichever terminal Ghostty's
+    /// `first` returns). `activate` always runs first, unconditionally — `focus` alone only
+    /// switches the target window/tab *within* Ghostty's own window ordering; it does not raise
+    /// the app above other apps' windows when Ghostty isn't already frontmost. When no match
+    /// clause finds a terminal, `activate` alone still surfaces the app.
     public static let ghostty = TerminalAppProfile(
         processBasenames: ["ghostty"],
         makeApp: { .ghostty(pid: $0) },
@@ -138,20 +144,101 @@ public enum TerminalAppCatalog {
         return preferred
     }
 
-    private static func ghosttyFocusScript(sessionName: String, currentPath: String, tty: String) -> String {
-        let titleMatch = "\"tmux attach -t \(escapeForAppleScript(sessionName))\""
-        let pathMatch = "\"\(escapeForAppleScript(currentPath))\""
+    /// `homeDirectory`/`homeChildren`/`resolveSymlink` default to real filesystem queries —
+    /// injected only so tests can override them without touching the real `$HOME`
+    /// (`symlinkAliasedCandidatePath`'s doc comment). Non-`private` for the same reason:
+    /// `TerminalAppCatalogTests` calls this directly with fake filesystem closures to prove the
+    /// symlink-aliased working-directory candidate is actually wired into the script, not just
+    /// computed correctly in isolation.
+    static func ghosttyFocusScript(
+        sessionName: String,
+        currentPath: String,
+        tty: String,
+        homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        homeChildren: (String) -> [String] = { home in (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? [] },
+        resolveSymlink: (String) -> String? = { path in
+            guard (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil else { return nil }
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+    ) -> String {
+        // TASK-038: a tab's title is frozen at whichever launch command actually opened it
+        // (live-confirmed this environment does not do tmux's dynamic title-setting) — an
+        // `attach`-opened tab and a `new-session`/`new-session -A`-opened tab for the same
+        // session end up titled differently, so all three launch forms need their own title
+        // candidate, tried in this order before falling through to the working-directory match.
+        let titleCandidates = [
+            "tmux attach -t \(sessionName)",
+            "tmux new-session -s \(sessionName)",
+            "tmux new-session -A -s \(sessionName)"
+        ]
+
+        // The canonical `pane_current_path` is always tried first; a symlink-aliased path (if
+        // one resolves) is an *additional* candidate appended after it, never a replacement.
+        var pathCandidates = [currentPath]
+        if let aliasedPath = symlinkAliasedCandidatePath(
+            for: currentPath,
+            homeDirectory: homeDirectory,
+            homeChildren: homeChildren,
+            resolveSymlink: resolveSymlink
+        ) {
+            pathCandidates.append(aliasedPath)
+        }
+
+        let branches = (
+            titleCandidates.map { appleScriptBranch(property: "name", rawValue: $0) }
+                + pathCandidates.map { appleScriptBranch(property: "working directory", rawValue: $0) }
+        ).joined(separator: "\n    else if ")
+
         return """
         -- target tty: \(tty)
         tell application "Ghostty"
             activate
-            if exists (first terminal whose name is \(titleMatch)) then
-                focus (first terminal whose name is \(titleMatch))
-            else if exists (first terminal whose working directory is \(pathMatch)) then
-                focus (first terminal whose working directory is \(pathMatch))
+            if \(branches)
             end if
         end tell
         """
+    }
+
+    /// One `exists (...) then\n  focus (...)`-shaped AppleScript clause matching a Ghostty
+    /// `terminal`'s `property` against `rawValue` — shared by `ghosttyFocusScript`'s title and
+    /// working-directory candidates so every candidate renders identically and is escaped
+    /// exactly once.
+    private static func appleScriptBranch(property: String, rawValue: String) -> String {
+        let match = "\"\(escapeForAppleScript(rawValue))\""
+        return "exists (first terminal whose \(property) is \(match)) then\n        focus (first terminal whose \(property) is \(match))"
+    }
+
+    /// Generates an *additional* Ghostty working-directory candidate for a pane's canonical
+    /// `currentPath` when it lives behind a home-relative symlink alias (e.g. `~/widgets` ->
+    /// `~/Work/Projects/widgets`, TASK-038 — live-diagnosed via `osascript`: Ghostty's own
+    /// `working directory` property reports the shell's actual `$PWD`, which stays unresolved
+    /// through a symlinked `cd`, while tmux's `pane_current_path` always reports the canonical,
+    /// fully-resolved path). Enumerates `homeChildren(homeDirectory)`, resolves each with
+    /// `resolveSymlink` (`nil` when a child isn't a symlink), and — where `currentPath`'s path
+    /// components start with a resolved target's — returns `currentPath` with that prefix
+    /// swapped back to the symlink's own (home-relative) name. Component-wise, not a raw string
+    /// prefix: `.../widgets` must not match `.../widgetsextra/repo`. Small and pure — home
+    /// listing and symlink resolution are both injected (mirrors `TmuxCore.resolveTmuxPath`'s
+    /// injectable `isExecutableFile`) — so it's unit-testable without touching the real `$HOME`.
+    static func symlinkAliasedCandidatePath(
+        for currentPath: String,
+        homeDirectory: String,
+        homeChildren: (String) -> [String],
+        resolveSymlink: (String) -> String?
+    ) -> String? {
+        let currentComponents = (currentPath as NSString).pathComponents
+        for child in homeChildren(homeDirectory) {
+            let childPath = (homeDirectory as NSString).appendingPathComponent(child)
+            guard let resolved = resolveSymlink(childPath) else { continue }
+            let resolvedComponents = (resolved as NSString).pathComponents
+            guard currentComponents.count >= resolvedComponents.count,
+                  Array(currentComponents.prefix(resolvedComponents.count)) == resolvedComponents else {
+                continue
+            }
+            let suffixComponents = Array(currentComponents.dropFirst(resolvedComponents.count))
+            return NSString.path(withComponents: (childPath as NSString).pathComponents + suffixComponents)
+        }
+        return nil
     }
 
     /// Escapes a value for embedding inside an AppleScript double-quoted string literal —

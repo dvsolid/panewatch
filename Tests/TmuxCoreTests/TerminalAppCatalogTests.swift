@@ -53,6 +53,162 @@ import Testing
         #expect(script.contains("/dev/ttys030"))
     }
 
+    /// TASK-038: a tab opened with `tmux new-session -s <session>` (rather than `attach`) is
+    /// titled literally that — live-confirmed this environment never overwrites it with tmux's
+    /// own dynamic title-setting — so the attach-only title check never fired for it.
+    @Test func ghosttyProfileFocusScriptAlsoMatchesANewSessionTitle() {
+        let script = TerminalAppCatalog.profile(for: .ghostty(pid: 1)).focusScript(Self.target, "/dev/ttys030")
+
+        #expect(script.contains("\"tmux new-session -s ztest1\""))
+    }
+
+    /// Same gap as above for the `-A` (attach-or-create) invocation's own frozen title.
+    @Test func ghosttyProfileFocusScriptAlsoMatchesANewSessionDashATitle() {
+        let script = TerminalAppCatalog.profile(for: .ghostty(pid: 1)).focusScript(Self.target, "/dev/ttys030")
+
+        #expect(script.contains("\"tmux new-session -A -s ztest1\""))
+    }
+
+    /// The three title candidates must all be tried before the working-directory fallback —
+    /// otherwise a coincidental cwd match could win over a more specific title match.
+    @Test func ghosttyProfileFocusScriptTriesAllTitleCandidatesBeforeWorkingDirectory() throws {
+        let script = TerminalAppCatalog.profile(for: .ghostty(pid: 1)).focusScript(Self.target, "/dev/ttys030")
+
+        let attachTitleIndex = try #require(script.range(of: "\"tmux attach -t ztest1\"")).lowerBound
+        let newSessionTitleIndex = try #require(script.range(of: "\"tmux new-session -s ztest1\"")).lowerBound
+        let newSessionATitleIndex = try #require(script.range(of: "\"tmux new-session -A -s ztest1\"")).lowerBound
+        let workingDirectoryIndex = try #require(script.range(of: "\"/Users/user/Projects/acme/ztest1\"")).lowerBound
+
+        #expect(attachTitleIndex < newSessionTitleIndex)
+        #expect(newSessionTitleIndex < newSessionATitleIndex)
+        #expect(newSessionATitleIndex < workingDirectoryIndex)
+
+        // Chained candidates must render as AppleScript's `else if`, not a bare `else` (which
+        // fails to compile) — the substring check above only proves each candidate is present,
+        // not that they're actually chained together correctly.
+        #expect(script.contains("else if"))
+    }
+
+    // MARK: - symlinkAliasedCandidatePath(for:homeDirectory:homeChildren:resolveSymlink:)
+    //
+    // TASK-038: tmux's `pane_current_path` reports the *canonical* cwd, but Ghostty's own
+    // `working directory` property reflects whatever `$PWD` the shell was actually `cd`'d
+    // through — which stays unresolved when that path passed through a home-relative symlink
+    // (e.g. `~/widgets` -> `~/Work/Projects/widgets`). This pure helper generates the alternate
+    // candidate. Home-directory listing and symlink resolution are both injected — mirrors
+    // `TmuxCore.resolveTmuxPath`'s injectable `isExecutableFile` — so these tests never touch
+    // the real `$HOME`.
+
+    @Test func symlinkAliasedCandidatePathSwapsTheResolvedPrefixForTheSymlinksOwnName() {
+        let candidate = TerminalAppCatalog.symlinkAliasedCandidatePath(
+            for: "/Users/user/Work/Projects/widgets/rc-widget",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets", "Work"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        #expect(candidate == "/Users/user/widgets/rc-widget")
+    }
+
+    @Test func symlinkAliasedCandidatePathHandlesAnExactMatchWithNoRemainder() {
+        let candidate = TerminalAppCatalog.symlinkAliasedCandidatePath(
+            for: "/Users/user/Work/Projects/widgets",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        #expect(candidate == "/Users/user/widgets")
+    }
+
+    @Test func symlinkAliasedCandidatePathReturnsNilWhenNoChildSymlinkResolvesTowardCurrentPath() {
+        let candidate = TerminalAppCatalog.symlinkAliasedCandidatePath(
+            for: "/Users/user/Work/Projects/other/repo",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        #expect(candidate == nil)
+    }
+
+    @Test func symlinkAliasedCandidatePathIgnoresChildrenThatAreNotSymlinks() {
+        let candidate = TerminalAppCatalog.symlinkAliasedCandidatePath(
+            for: "/Users/user/Work/Projects/widgets/rc-widget",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { _ in nil }
+        )
+
+        #expect(candidate == nil)
+    }
+
+    /// A resolved target that's merely a string prefix of `currentPath` — not a real path-
+    /// component boundary — must not match. Without component-wise comparison, resolved
+    /// `.../widgets` would wrongly match `.../widgetsextra/repo`.
+    @Test func symlinkAliasedCandidatePathRequiresAPathComponentBoundaryNotJustAStringPrefix() {
+        let candidate = TerminalAppCatalog.symlinkAliasedCandidatePath(
+            for: "/Users/user/Work/Projects/widgetsextra/repo",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        #expect(candidate == nil)
+    }
+
+    // MARK: - ghosttyFocusScript's symlink-aliased working-directory candidate wiring
+
+    /// Proves `ghosttyFocusScript` actually wires `symlinkAliasedCandidatePath`'s result into
+    /// an additional working-directory candidate, not just that the pure helper computes one
+    /// correctly in isolation.
+    @Test func ghosttyFocusScriptAddsASymlinkAliasedWorkingDirectoryCandidateWhenOneResolves() {
+        let script = TerminalAppCatalog.ghosttyFocusScript(
+            sessionName: "wgt",
+            currentPath: "/Users/user/Work/Projects/widgets/rc-widget",
+            tty: "/dev/ttys030",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        #expect(script.contains("\"/Users/user/Work/Projects/widgets/rc-widget\""))
+        #expect(script.contains("\"/Users/user/widgets/rc-widget\""))
+    }
+
+    /// The canonical-path candidate must still be tried before the symlink-aliased one — the
+    /// alias is an *additional* candidate, not a replacement.
+    @Test func ghosttyFocusScriptTriesTheCanonicalWorkingDirectoryBeforeTheAliasedOne() throws {
+        let script = TerminalAppCatalog.ghosttyFocusScript(
+            sessionName: "wgt",
+            currentPath: "/Users/user/Work/Projects/widgets/rc-widget",
+            tty: "/dev/ttys030",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in ["widgets"] },
+            resolveSymlink: { path in path == "/Users/user/widgets" ? "/Users/user/Work/Projects/widgets" : nil }
+        )
+
+        let canonicalIndex = try #require(script.range(of: "\"/Users/user/Work/Projects/widgets/rc-widget\"")).lowerBound
+        let aliasedIndex = try #require(script.range(of: "\"/Users/user/widgets/rc-widget\"")).lowerBound
+        #expect(canonicalIndex < aliasedIndex)
+    }
+
+    /// When no home-directory child resolves toward the pane's canonical path, the script must
+    /// stay exactly as before — no dangling extra clause.
+    @Test func ghosttyFocusScriptOmitsTheAliasedCandidateWhenNoSymlinkResolves() {
+        let script = TerminalAppCatalog.ghosttyFocusScript(
+            sessionName: "wgt",
+            currentPath: "/Users/user/Work/Projects/widgets/rc-widget",
+            tty: "/dev/ttys030",
+            homeDirectory: "/Users/user",
+            homeChildren: { _ in [] },
+            resolveSymlink: { _ in nil }
+        )
+
+        #expect(script.contains("\"/Users/user/Work/Projects/widgets/rc-widget\""))
+        #expect(!script.contains("\"/Users/user/widgets/rc-widget\""))
+    }
+
     @Test func iTerm2ProfileFocusScriptSelectsByTTY() {
         let script = TerminalAppCatalog.profile(for: .iTerm2(pid: 2)).focusScript(Self.target, "/dev/ttys030")
 
