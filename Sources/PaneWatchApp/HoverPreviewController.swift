@@ -514,6 +514,7 @@ final class HoverPreviewController: NSResponder {
             do {
                 _ = try scriptRunner.run(script: script)
             } catch {
+                FileHandle.standardError.write(Data("panewatch: focusExisting script failed (\(error)) for \(paneID), falling back to open-new\n".utf8))
                 // Acceptance item 3: Automation permission denied (or any other run failure)
                 // falls back to opening a new terminal — always via Ghostty (`preferredApp:
                 // nil`), never the app that just failed. **[REQ CHANGE], found live** (this
