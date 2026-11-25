@@ -279,8 +279,10 @@ final class TileCardView {
             case .symbol(let name):
                 badgeLabel.isHidden = true
                 badgeImageView.isHidden = false
-                // A reused view may have last shown `.pixelPi`, which clears the tint.
+                // A reused view may have last shown `.pixelPi`, which clears the tint and
+                // stops the image scaling up to fill the slot.
                 badgeImageView.contentTintColor = .white
+                badgeImageView.imageScaling = .scaleProportionallyUpOrDown
                 let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
                 image?.isTemplate = true
                 badgeImageView.image = image
@@ -289,6 +291,10 @@ final class TileCardView {
                 badgeImageView.isHidden = false
                 // Full-colour art: no tint, and not a template (which would flatten it to one colour).
                 badgeImageView.contentTintColor = nil
+                // Drawn at its natural 1pt-per-cell size (12x11pt) rather than stretched to
+                // the 16pt slot — filling the slot made it read larger than the `π` text and
+                // SF Symbol badges beside it (direct user feedback, 2026-11-24).
+                badgeImageView.imageScaling = .scaleNone
                 badgeImageView.image = PixelPiImage.shared
             }
         }
