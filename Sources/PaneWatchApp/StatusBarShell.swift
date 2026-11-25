@@ -1,4 +1,5 @@
 import AppKit
+import os
 import TmuxCore
 
 /// The AppKit adapter at the boundary between `StatusBarEngine` and the OS: owns the Menu Bar
@@ -11,7 +12,16 @@ import TmuxCore
 @MainActor
 final class StatusBarShell: NSObject {
     private var statusItem: NSStatusItem?
-    private let panel: FloatingPanel
+    /// Replaceable (TASK-040): a panel the window server has stranded off-screen is discarded
+    /// for a freshly created one — see `healPanel(trigger:)`.
+    private var panel: FloatingPanel
+    private let windowServerProbe: any WindowServerProbe
+    /// A heal already ran for the current show attempt — `PanelStrandingPolicy` turns a second
+    /// stranded reading into `.giveUp` rather than a rebuild loop. Reset whenever the user's
+    /// click shows a hidden panel (or gives up and hides it), so every attempt starts fresh.
+    private var healedThisAttempt = false
+    private var settleCheckTask: Task<Void, Never>?
+    private static let logger = Logger(subsystem: "PaneWatch", category: "FloatingPanel")
     private let engine: StatusBarEngine
     /// Re-runs discovery on `discoveryInterval` (TASK-006) — the only timer that spawns
     /// `list-panes -a`. New/closed agent panes join or leave the Tile list on this cadence,
@@ -45,8 +55,9 @@ final class StatusBarShell: NSObject {
             discovery: PaneDiscovery(gateway: gateway),
             activitySource: activitySource
         )
-    }()) {
+    }(), windowServerProbe: any WindowServerProbe = CGWindowServerProbe()) {
         self.engine = engine
+        self.windowServerProbe = windowServerProbe
         // Shares `engine`'s own `ActivityStateStore` with the Hover Preview Popup so its
         // `PreviewClientLifecycle` can mute the popup's own zoom-induced repaint out of
         // activity tracking — see `StatusBarEngine.activityStateStore`'s doc comment.
@@ -126,8 +137,86 @@ final class StatusBarShell: NSObject {
         if event.type == .rightMouseUp {
             showStatusItemMenu()
         } else {
-            panel.toggleVisibility()
+            togglePanel()
         }
+    }
+
+    // MARK: - Stranded-panel self-heal (TASK-040)
+
+    /// Shows or hides the panel — except that a panel AppKit calls visible but the window server
+    /// reports off screen is replaced and shown instead of hidden (that click heals, it does not
+    /// toggle). The window server's verdict is never read synchronously after an order call; see
+    /// `PanelStrandingPolicy.settleInterval`.
+    private func togglePanel() {
+        switch PanelStrandingPolicy.decide(.click, strandingInput()) {
+        case .show:
+            healedThisAttempt = false
+            showPanel()
+        case .hide:
+            panel.hide()
+        case .heal:
+            healPanel(trigger: "click")
+        case .giveUp:
+            logGaveUp(trigger: "click")
+            panel.hide()
+            healedThisAttempt = false
+        case .none:
+            break
+        }
+    }
+
+    private func showPanel() {
+        panel.show()
+        scheduleSettleCheck()
+    }
+
+    /// The delayed re-check after each show: heals a panel that was stranded on a show the click
+    /// path never revisits. A stale reading is harmless — the next click still catches it.
+    private func scheduleSettleCheck() {
+        settleCheckTask?.cancel()
+        settleCheckTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(PanelStrandingPolicy.settleInterval + 0.05))
+            guard !Task.isCancelled else { return }
+            self?.runSettleCheck()
+        }
+    }
+
+    private func runSettleCheck() {
+        switch PanelStrandingPolicy.decide(.settleCheck, strandingInput()) {
+        case .heal: healPanel(trigger: "settle check")
+        case .giveUp: logGaveUp(trigger: "settle check")
+        case .show, .hide, .none: break
+        }
+    }
+
+    private func strandingInput() -> PanelStrandingPolicy.Input {
+        PanelStrandingPolicy.Input(
+            appKitVisible: panel.isVisible,
+            windowServerOnScreen: windowServerProbe.isOnScreen(windowNumber: panel.windowNumber),
+            timeSinceShown: panel.shownAt.map { Date().timeIntervalSince($0) } ?? .infinity,
+            alreadyHealed: healedThisAttempt
+        )
+    }
+
+    /// Replaces the stranded panel with a fresh one — the only remedy observed to work — and
+    /// shows it with the current Tiles; Dock Side comes from `dockSideStore` as for any new panel.
+    private func healPanel(trigger: String) {
+        let reported = windowServerProbe.isOnScreen(windowNumber: panel.windowNumber)
+        Self.logger.notice("""
+            healing stranded panel (\(trigger, privacy: .public)): AppKit isVisible=true, \
+            windowServerOnScreen=\(reported.map(String.init(describing:)) ?? "absent", privacy: .public), \
+            windowNumber=\(self.panel.windowNumber, privacy: .public)
+            """)
+        let stranded = panel
+        panel = FloatingPanel(activityMuter: engine.activityStateStore)
+        panel.render(engine.tiles())
+        stranded.retire()
+        healedThisAttempt = true
+        showPanel()
+    }
+
+    private func logGaveUp(trigger: String) {
+        Self.logger.error("replacement panel is also off screen (\(trigger, privacy: .public)); not healing again this attempt")
     }
 
     /// Attaching a menu permanently to the status item would make left-click open it instead

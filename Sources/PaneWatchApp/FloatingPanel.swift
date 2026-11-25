@@ -214,21 +214,36 @@ final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Shows the panel if hidden, hides it if shown. Recomputes the frame each time it's
-    /// shown so it stays correctly positioned even if the screen configuration changed while
-    /// hidden.
-    func toggleVisibility() {
-        if isVisible {
-            orderOut(nil)
-            // Whole-branch review finding: hiding the panel never told the hover controller,
-            // so a popup left open at the moment of hiding kept its grouped tmux session alive
-            // (and duplicating the hovered pane's pane_id in `list-panes -a`) indefinitely —
-            // nothing else prunes it, since `tileSetWillChange` only fires from `render(_:)`.
-            hoverController.closeActivePreview()
-        } else {
-            setFrame(FloatingPanel.frame(on: NSScreen.main, side: dockSide), display: true)
-            orderFrontRegardless()
-        }
+    /// When `show()` last ordered the panel front — `PanelStrandingPolicy` needs it to tell a
+    /// window-server flag that is merely lagging from one that is genuinely absent (TASK-040).
+    private(set) var shownAt: Date?
+
+    /// Recomputes the frame each time it's shown so it stays correctly positioned even if the
+    /// screen configuration changed while hidden.
+    func show() {
+        setFrame(FloatingPanel.frame(on: NSScreen.main, side: dockSide), display: true)
+        orderFrontRegardless()
+        shownAt = Date()
+    }
+
+    func hide() {
+        orderOut(nil)
+        // Whole-branch review finding: hiding the panel never told the hover controller,
+        // so a popup left open at the moment of hiding kept its grouped tmux session alive
+        // (and duplicating the hovered pane's pane_id in `list-panes -a`) indefinitely —
+        // nothing else prunes it, since `tileSetWillChange` only fires from `render(_:)`.
+        hoverController.closeActivePreview()
+    }
+
+    /// TASK-040: leaves nothing behind when `StatusBarShell` replaces a stranded panel with a
+    /// fresh one — the repeating blink timer is invalidated (it would otherwise keep firing for
+    /// the process lifetime) and any open Hover Preview Popup goes through the same close path
+    /// as hiding, so no `panewatch-preview-*` tmux session leaks. Only `orderOut`, never
+    /// `close()`: the caller just drops its reference.
+    func retire() {
+        blinkTimer?.invalidate()
+        blinkTimer = nil
+        hide()
     }
 
     /// Jumps the panel to `side` immediately — `setFrame(_:display:)`, never the `animate:`
