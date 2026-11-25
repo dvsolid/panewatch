@@ -6,7 +6,7 @@ A native macOS app that monitors and manages AI coding agent tmux sessions acros
 
 ## Core Problem
 
-When running multiple AI coding agents simultaneously (Claude Code, Pi, Codex) across tmux sessions, there is no quick way to:
+When running multiple AI coding agents simultaneously (Claude Code, Pi, OMP, Codex) across tmux sessions, there is no quick way to:
 1. See which agents are actively producing output vs idle
 2. Know how long an agent has been idle
 3. Quickly focus on or open a specific agent's terminal
@@ -38,7 +38,7 @@ Existing solutions (top, tmux list-panes, tmux capture-pane) are CLI-only and re
     reintroducing a very slow opacity fade *after* `fadeWindow` is the natural extension —
     not attempted here since nothing has demonstrated the need yet.
   - **Label** — session name or project name (e.g., "ops-auto", "wgt", "squid")
-  - **Agent type badge** — π (Pi), 🟣 (Claude Code), 🤖 (Codex), or auto-detected
+  - **Agent type badge** — π (Pi), a pixel-art gradient π (OMP), 🟣 (Claude Code), 🤖 (Codex), or auto-detected
   - **Optional task indicator** — if Claude Code has a visible prompt task (e.g., "✳ WGT-4821")
 
 **Timing (single source of truth — do not restate these elsewhere):**
@@ -90,6 +90,7 @@ Any rule keyed on `cmd=node` misses most real Pi panes. **What distinguishes the
 
 1. **Title pattern** — cheap, comes free with the `list-panes` format string, no extra process spawn. **Not final on its own**: tmux's `pane_title` is sticky and outlives the process that set it, so a title match is corroborated every discovery pass against a live descendant of `pane_pid` (step 2's walk, uncached — see below) before it's trusted. A title match with no corroborating descendant this pass is demoted, not kept.
    - Pi: title starts with `π` (typically `π - <project>`)
+   - OMP (Oh My Pi): shares Pi's `π` title prefix (`π > <dirname>`), so the title alone can't distinguish it from Pi. The corroborating descendant does: its process is a bare executable named exactly `omp` (argv is just `omp`, no children), so a `π`-titled pane whose descendant is `omp` classifies as OMP, while one whose descendant is `pi` stays Pi. An unbranded pane with an `omp` descendant is classified as OMP by step 2's fallback walk.
    - Claude Code: title starts with `✳ ` (the task indicator)
 2. **Descendant process inspection** — the robust fallback, and also step 1's corroboration check. Walk children of `pane_pid` and match on argv. This is the only method that survives both the shell-wrapping problem above and Claude Code version bumps.
 3. **`pane_current_command`** — corroborating evidence only, never the sole basis for a positive ID.
@@ -370,6 +371,7 @@ struct AgentPane: Identifiable, Hashable {
 
 enum AgentType: String, Codable {
     case pi                          // raw value "pi" — NOT "π"
+    case omp                         // Oh My Pi — shares Pi's `π` title; disambiguated by the `omp` descendant (§2)
     case claude
     case codex
     case unknown
@@ -378,6 +380,7 @@ enum AgentType: String, Codable {
     var glyph: String {
         switch self {
         case .pi:      return "π"
+        case .omp:     return "π"   // rendered as a pixel-art gradient image, not text
         case .claude:  return "🟣"
         case .codex:   return "🤖"
         case .unknown: return "•"

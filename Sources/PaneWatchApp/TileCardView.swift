@@ -1,6 +1,9 @@
 import AppKit
 import TmuxCore
 
+// swiftlint:disable file_length
+// Pre-existing size debt (crossed 400 lines with TASK-039's badge case); tracked for a future split.
+
 /// `card`'s concrete type (see `TileCardView.view`) — overrides `acceptsFirstMouse` so
 /// TASK-020's double-click gesture recognizer actually receives clicks. `FloatingPanel.
 /// canBecomeKey` is hard-wired `false` (the panel must never steal focus/key status), so it can
@@ -276,9 +279,17 @@ final class TileCardView {
             case .symbol(let name):
                 badgeLabel.isHidden = true
                 badgeImageView.isHidden = false
+                // A reused view may have last shown `.pixelPi`, which clears the tint.
+                badgeImageView.contentTintColor = .white
                 let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
                 image?.isTemplate = true
                 badgeImageView.image = image
+            case .pixelPi:
+                badgeLabel.isHidden = true
+                badgeImageView.isHidden = false
+                // Full-colour art: no tint, and not a template (which would flatten it to one colour).
+                badgeImageView.contentTintColor = nil
+                badgeImageView.image = PixelPiImage.shared
             }
         }
         if nameLabel.stringValue != tile.label {

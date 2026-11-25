@@ -11,12 +11,16 @@ public enum AgentType: Sendable, Equatable {
     case pi
     case claudeCode
     case codex
+    /// Oh My Pi. Shares Pi's `π` title prefix, so a title match alone can't tell the two apart —
+    /// `detectType` disambiguates via the corroborating descendant (`omp` vs `pi`).
+    case omp
 
     public var badge: BadgeGlyph {
         switch self {
         case .pi: return .text("π")
         case .claudeCode: return .symbol(name: "sparkle")
         case .codex: return .symbol(name: "chevron.left.forwardslash.chevron.right")
+        case .omp: return .pixelPi
         }
     }
 }
@@ -221,7 +225,11 @@ public struct AgentDetector: Sendable {
             // snapshot failed) — fail open and keep the title-based classification rather than
             // demoting on a snapshot failure.
             guard let argv = batchArgv[pane.pid] else { return (type, true) }
-            return Self.matchAgentType(argv: argv) != nil ? (type, true) : nil
+            guard let descendantType = Self.matchAgentType(argv: argv) else { return nil }
+            // OMP brands its title with Pi's `π` prefix (TASK-039), so a `π` title alone reads as
+            // Pi; the live descendant is what tells them apart. Only this one pairing is
+            // reclassified — any other title/descendant mismatch keeps the title's type.
+            return (type == .pi && descendantType == .omp ? .omp : type, true)
         case .excluded:
             return nil
         case .needsDescendantWalk:
@@ -247,7 +255,8 @@ public struct AgentDetector: Sendable {
     private static let agentProcessNames: [String: AgentType] = [
         "claude": .claudeCode,
         "pi": .pi,
-        "codex": .codex
+        "codex": .codex,
+        "omp": .omp
     ]
 
     private static func matchAgentType(argv: [String]) -> AgentType? {

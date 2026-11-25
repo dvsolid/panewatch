@@ -3,8 +3,10 @@
 [![Tests](https://github.com/dvsolid/panewatch/actions/workflows/tests.yml/badge.svg)](https://github.com/dvsolid/panewatch/actions/workflows/tests.yml)
 
 A native macOS menu bar app that watches your tmux sessions and shows which AI coding agents
-(Claude Code, Codex, etc.) are running, what they're doing, and whether they need your
-attention — in a small floating status bar you can glance at from any Space.
+(Claude Code, Codex, Pi, OMP, etc.) are running, what they're doing, and whether they need your
+attention — in a small floating status bar you can glance at from any Space. OMP (Oh My Pi)
+brands its tmux title with the same `π` prefix as Pi, so the two are told apart by the live
+`omp` vs `pi` process under the pane.
 
 ## Requirements
 
