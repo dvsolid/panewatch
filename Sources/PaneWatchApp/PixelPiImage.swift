@@ -3,8 +3,9 @@ import TmuxCore
 
 /// TASK-039: the OMP badge, rasterized from `PixelPiGlyph`'s cells as crisp filled rects (no
 /// antialiasing/interpolation) — drawn rather than bundled, since the app runs as a bare
-/// `.build/debug` binary with no resources. The handler re-runs at the destination's size,
-/// so the image stays sharp when `TileCardView.badgeImageView` scales it into the 16pt slot.
+/// `.build/debug` binary with no resources. Sized at one point per cell (12x11pt), which is how
+/// `TileCardView.badgeImageView` shows it (`.scaleNone`); the drawing handler re-runs per
+/// backing scale, so the cells stay sharp on Retina.
 @MainActor
 enum PixelPiImage {
     static let shared: NSImage = {

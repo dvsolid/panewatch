@@ -26,6 +26,10 @@ public enum PanelStrandingPolicy {
         case heal
         /// Stranded again after this attempt already healed once — stop rather than loop.
         case giveUp
+        /// The window server confirms the panel is on screen (`settleCheck` only). Nothing to do
+        /// to the panel, but the caller must forget any earlier heal: that heal worked, so a
+        /// later stranding is a new attempt that deserves its own heal, not a give-up.
+        case confirmedHealthy
         /// Nothing to do (`settleCheck` only).
         case none
     }
@@ -68,6 +72,7 @@ public enum PanelStrandingPolicy {
         if input.isStranded {
             return input.alreadyHealed ? .giveUp : .heal
         }
-        return trigger == .click ? .hide : .none
+        if trigger == .click { return .hide }
+        return input.windowServerOnScreen == true ? .confirmedHealthy : .none
     }
 }

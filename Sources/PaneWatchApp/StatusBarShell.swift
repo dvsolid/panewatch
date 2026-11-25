@@ -160,7 +160,7 @@ final class StatusBarShell: NSObject {
             logGaveUp(trigger: "click")
             panel.hide()
             healedThisAttempt = false
-        case .none:
+        case .confirmedHealthy, .none:
             break
         }
     }
@@ -185,6 +185,7 @@ final class StatusBarShell: NSObject {
         switch PanelStrandingPolicy.decide(.settleCheck, strandingInput()) {
         case .heal: healPanel(trigger: "settle check")
         case .giveUp: logGaveUp(trigger: "settle check")
+        case .confirmedHealthy: healedThisAttempt = false
         case .show, .hide, .none: break
         }
     }
